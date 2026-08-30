@@ -60,8 +60,6 @@ services:
   customer-frontend:
     build:
       context: ./application/frontend
-      args:
-        VITE_API_BASE_URL: ${CUSTOMER_API_BASE_URL:-http://localhost:8080}
     image: devshop-customer-frontend:0.1.0
     container_name: devshop-customer-frontend
     restart: unless-stopped
@@ -76,8 +74,6 @@ services:
   admin-frontend:
     build:
       context: ./application/admin-frontend
-      args:
-        VITE_API_BASE_URL: ${ADMIN_API_BASE_URL:-http://localhost:8080}
     image: devshop-admin-frontend:0.1.0
     container_name: devshop-admin-frontend
     restart: unless-stopped

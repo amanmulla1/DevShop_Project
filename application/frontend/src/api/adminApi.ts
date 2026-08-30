@@ -1,9 +1,7 @@
 import { Product } from '../types/Product'
 import { Customer } from '../types/Customer'
 import { Order } from '../types/Order'
-import { getBaseUrl } from './config'
-
-const BASE_URL = getBaseUrl()
+import { API_BASE_URL } from './config'
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -25,12 +23,12 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export async function fetchAdminProducts(): Promise<Product[]> {
-  const response = await fetch(`${BASE_URL}/api/admin/products`)
+  const response = await fetch(`${API_BASE_URL}/admin/products`)
   return handleResponse<Product[]>(response)
 }
 
 export async function createAdminProduct(product: Partial<Product>) {
-  const response = await fetch(`${BASE_URL}/api/admin/products`, {
+  const response = await fetch(`${API_BASE_URL}/admin/products`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(product),
@@ -39,7 +37,7 @@ export async function createAdminProduct(product: Partial<Product>) {
 }
 
 export async function updateAdminProduct(id: number, product: Partial<Product>) {
-  const response = await fetch(`${BASE_URL}/api/admin/products/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/admin/products/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(product),
@@ -48,19 +46,19 @@ export async function updateAdminProduct(id: number, product: Partial<Product>) 
 }
 
 export async function deleteAdminProduct(id: number) {
-  const response = await fetch(`${BASE_URL}/api/admin/products/${id}`, { method: 'DELETE' })
+  const response = await fetch(`${API_BASE_URL}/admin/products/${id}`, { method: 'DELETE' })
   if (!response.ok) {
     throw new Error('Unable to delete product')
   }
 }
 
 export async function fetchAdminCustomers(): Promise<Customer[]> {
-  const response = await fetch(`${BASE_URL}/api/customers`)
+  const response = await fetch(`${API_BASE_URL}/customers`)
   return handleResponse<Customer[]>(response)
 }
 
 export async function createAdminCustomer(customer: Partial<Customer>) {
-  const response = await fetch(`${BASE_URL}/api/customers`, {
+  const response = await fetch(`${API_BASE_URL}/customers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(customer),
@@ -69,7 +67,7 @@ export async function createAdminCustomer(customer: Partial<Customer>) {
 }
 
 export async function updateAdminCustomer(id: number, customer: Partial<Customer>) {
-  const response = await fetch(`${BASE_URL}/api/customers/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/customers/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(customer),
@@ -78,19 +76,19 @@ export async function updateAdminCustomer(id: number, customer: Partial<Customer
 }
 
 export async function deleteAdminCustomer(id: number) {
-  const response = await fetch(`${BASE_URL}/api/customers/${id}`, { method: 'DELETE' })
+  const response = await fetch(`${API_BASE_URL}/customers/${id}`, { method: 'DELETE' })
   if (!response.ok) {
     throw new Error('Unable to delete customer')
   }
 }
 
 export async function fetchAdminOrders(): Promise<Order[]> {
-  const response = await fetch(`${BASE_URL}/api/orders`)
+  const response = await fetch(`${API_BASE_URL}/orders`)
   return handleResponse<Order[]>(response)
 }
 
 export async function updateAdminOrderStatus(id: number, status: string) {
-  const response = await fetch(`${BASE_URL}/api/orders/${id}/status`, {
+  const response = await fetch(`${API_BASE_URL}/orders/${id}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),

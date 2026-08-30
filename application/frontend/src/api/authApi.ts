@@ -1,6 +1,4 @@
-import { getBaseUrl } from './config'
-
-const BASE_URL = getBaseUrl()
+import { API_BASE_URL } from './config'
 
 export interface AuthUser {
   role: 'CUSTOMER' | 'ADMIN'
@@ -38,7 +36,7 @@ export async function registerCustomer(payload: {
   state?: string
   postalCode?: string
 }): Promise<AuthResponse> {
-  const response = await fetch(`${BASE_URL}/api/auth/register`, {
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -47,7 +45,7 @@ export async function registerCustomer(payload: {
 }
 
 export async function loginCustomer(email: string, password: string): Promise<AuthResponse> {
-  const response = await fetch(`${BASE_URL}/api/auth/login`, {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -56,7 +54,7 @@ export async function loginCustomer(email: string, password: string): Promise<Au
 }
 
 export async function fetchOrders(token: string): Promise<import('../types/Order').Order[]> {
-  const response = await fetch(`${BASE_URL}/api/customers/me/orders`, {
+  const response = await fetch(`${API_BASE_URL}/customers/me/orders`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   return handleResponse<import('../types/Order').Order[]>(response)
@@ -75,7 +73,7 @@ export interface CustomerProfile extends AuthUser {
  * The identity is derived server-side from the JWT — never a client id.
  */
 export async function fetchMe(token: string): Promise<CustomerProfile> {
-  const response = await fetch(`${BASE_URL}/api/auth/me`, {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   return handleResponse<CustomerProfile>(response)
@@ -83,7 +81,7 @@ export async function fetchMe(token: string): Promise<CustomerProfile> {
 
 export async function logout(): Promise<void> {
   try {
-    await fetch(`${BASE_URL}/api/auth/logout`, { method: 'POST' })
+    await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST' })
   } catch {
     // Stateless JWT — the client discards the token regardless.
   }

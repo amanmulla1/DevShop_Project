@@ -1,12 +1,12 @@
 # =============================================================================
 # DevShop Admin Frontend - Multi-stage Docker build
 #   Build stage : node:22-alpine   (npm ci + vite build)
-#   Run stage   : nginx:1.27-alpine (static file server)
+#   Run stage   : nginx:1.27-alpine (static file server + API reverse proxy)
 #
-# NOTE: VITE_API_BASE_URL is a BUILD-TIME variable baked into the static JS
-# bundle. The browser runs OUTSIDE the Docker network, so it must reach the
-# backend via a browser-reachable address (http://localhost:8080 for local
-# Docker development) and NOT the in-network service name "backend".
+# The browser calls relative /api URLs on the SAME origin (port 5174). Nginx
+# in this image reverse-proxies /api/* to the backend service over the Docker
+# network (backend:8080). No backend hostname/IP is baked into the JS bundle,
+# so the frontend works on localhost, any EC2 IP, or a domain without rebuild.
 # =============================================================================
 
 # ---- Stage 1: Build ----
@@ -17,8 +17,6 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
-ARG VITE_API_BASE_URL=http://localhost:8080
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN npm run build
 

@@ -1,6 +1,4 @@
-import { getBaseUrl } from './config'
-
-const BASE_URL = getBaseUrl()
+import { API_BASE_URL } from './config'
 
 export interface AdminAuthResponse {
   token: string
@@ -20,7 +18,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export async function loginAdmin(email: string, password: string): Promise<AdminAuthResponse> {
-  const response = await fetch(`${BASE_URL}/api/auth/admin/login`, {
+  const response = await fetch(`${API_BASE_URL}/auth/admin/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -30,7 +28,7 @@ export async function loginAdmin(email: string, password: string): Promise<Admin
 
 export async function logout(): Promise<void> {
   try {
-    await fetch(`${BASE_URL}/api/auth/logout`, { method: 'POST' })
+    await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST' })
   } catch {
     // Stateless JWT — the client discards the token regardless.
   }

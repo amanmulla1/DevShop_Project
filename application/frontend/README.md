@@ -38,9 +38,22 @@ cp .env.example .env.local
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API base URL |
+| *(none required)* | `/api` | The frontend calls relative `/api` URLs on the same origin. |
 
 **Never commit `.env.local`.**
+
+### How the frontend reaches the backend
+
+The browser calls relative `/api/**` URLs on the **same origin** (port 5173),
+so no backend hostname or IP is baked into the bundle.
+
+- **Development** (`npm run dev`): the Vite dev server proxies `/api` to
+  `http://localhost:8080` (see `vite.config.ts`).
+- **Production / Docker** (`:5173`): the frontend's Nginx reverse-proxies
+  `/api` to the backend over the Docker network (`backend:8080`).
+
+This works on `localhost`, any EC2 IP, or a domain without any rebuild or
+configuration change.
 
 ---
 

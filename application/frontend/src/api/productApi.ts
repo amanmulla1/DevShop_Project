@@ -1,7 +1,5 @@
 import { Product } from '../types/Product'
-import { getBaseUrl } from './config'
-
-const BASE_URL = getBaseUrl()
+import { API_BASE_URL } from './config'
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -18,7 +16,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
  * Returns the full product list.
  */
 export async function fetchProducts(): Promise<Product[]> {
-  const response = await fetch(`${BASE_URL}/api/products`)
+  const response = await fetch(`${API_BASE_URL}/products`)
   return handleResponse<Product[]>(response)
 }
 
@@ -27,6 +25,6 @@ export async function fetchProducts(): Promise<Product[]> {
  * Returns a single product. Throws if not found (404).
  */
 export async function fetchProductById(id: number): Promise<Product> {
-  const response = await fetch(`${BASE_URL}/api/products/${id}`)
+  const response = await fetch(`${API_BASE_URL}/products/${id}`)
   return handleResponse<Product>(response)
 }

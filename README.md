@@ -66,11 +66,35 @@ docker compose up -d --build
 |-------------|-----|
 | Customer storefront | http://localhost:5173 |
 | Admin dashboard | http://localhost:5174 |
-| Backend API | http://localhost:8080 |
+| Backend API (internal / debug) | http://localhost:8080 |
 | Backend health check | http://localhost:8080/actuator/health |
 
 The admin account is created automatically on first backend startup using the
 values in `.env` (`ADMIN_EMAIL`, `ADMIN_PASSWORD`).
+
+### Frontend → backend communication (no hard-coded IPs)
+
+The browser calls relative `/api/**` URLs on the **same origin**:
+
+```
+Browser (:5173 / :5174)
+    │  /api/*
+    ▼
+Frontend Nginx (reverse proxy)
+    │  backend:8080   (Docker internal network)
+    ▼
+Backend :8080
+    ▼
+PostgreSQL :5432
+```
+
+The frontend bundles contain **no backend hostname or IP**. Each frontend's
+Nginx proxies `/api/*` to the backend service over the Docker network
+(`backend:8080`). This means the same image works on `localhost`, any EC2 IP,
+or a domain — changing the server IP never requires a frontend rebuild.
+
+For local development (`npm run dev`), the Vite dev server proxies `/api` to
+`http://localhost:8080` (see each `vite.config.ts`).
 
 ### 4. Stop the stack
 
@@ -125,7 +149,8 @@ for the full set of options.
 
 - **Backend** — `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`,
   `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`.
-- **Frontends** — `VITE_API_BASE_URL` (the backend URL the browser talks to).
+- **Frontends** — none required. The browser uses relative `/api` URLs on the
+  same origin; Nginx (production) / Vite (dev) forwards to the backend.
 
 ## Testing
 
