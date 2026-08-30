@@ -1,0 +1,33 @@
+# Environment / secrets - DO NOT COMMIT
+.env
+.env.*
+!.env.example
+
+# Secrets / keys
+*.pem
+*.key
+
+# Node dependencies (all), build outputs
+node_modules/
+dist/
+
+# Backend build output
+application/backend/target/
+*.class
+
+# Logs
+*.log
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.swp
+*~
