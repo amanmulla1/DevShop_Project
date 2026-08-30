@@ -31,3 +31,19 @@ Thumbs.db
 *.tmp
 *.swp
 *~
+
+# Internal development / session files (never publish)
+PROJECT_STATUS.md
+PROJECT_SPEC.md
+CLAUDE.md
+FINAL_VERIFICATION_REPORT.md
+FRONTEND_SPLIT_COMPLETION.md
+POSTGRESQL_VERIFICATION_COMPLETE.md
+RUNNING_APPLICATIONS.md
+SCHEMA_MIGRATION_REPORT.md
+run_all_tests.bat
+verify_api.ps1
+
+# Stray npm files inside the Maven backend (not part of the project)
+application/backend/package.json
+application/backend/package-lock.json
