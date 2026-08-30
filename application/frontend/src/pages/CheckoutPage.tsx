@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { Product } from '../types/Product'
 import { useAuth } from '../context/AuthContext'
 import { fetchMe } from '../api/authApi'
+import { getBaseUrl } from '../api/config'
 import { getProductVisual } from '../utils/productVisual'
 
 interface CheckoutProps {
@@ -134,7 +135,7 @@ export default function CheckoutPage({ cart }: CheckoutProps) {
         headers['Authorization'] = `Bearer ${token}`
       }
 
-      const response = await fetch('http://localhost:8080/api/orders', {
+      const response = await fetch(`${getBaseUrl()}/api/orders`, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
