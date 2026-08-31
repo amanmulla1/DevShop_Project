@@ -35,7 +35,7 @@ public class DataInitializer {
     private static final Logger log = LoggerFactory.getLogger(DataInitializer.class);
 
     @org.springframework.beans.factory.annotation.Value("${app.admin.email}")
-    private String appAdminEmail = "admin@ds.com";
+    private String appAdminEmail = "admin@devshop.com";
 
     @org.springframework.beans.factory.annotation.Value("${app.admin.name}")
     private String appAdminName = "DevShop Admin";
@@ -227,8 +227,8 @@ public class DataInitializer {
 
             // No admin exists under the configured target email. In this
             // development deployment a stale admin was previously seeded under a
-            // different default email (e.g. admin@devshop.com). Migrate that row
-            // to the configured email so exactly one admin@ds.com always exists.
+            // different default email. Migrate that row
+            // to the configured email so exactly one admin@devshop.com always exists.
             // The seeder only ever creates a single admin, so the first row with a
             // non-target email is the legacy one to update in place.
             Admin stale = repository.findAll().stream()

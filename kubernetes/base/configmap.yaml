@@ -33,5 +33,5 @@ data:
   # the browser talks to a single external origin and /api is same-origin, so
   # keep these EXACTLY aligned to the Ingress hosts used in the AWS overlay.
   CORS_ALLOWED_ORIGINS: "http://devshop.local,http://devshop-admin.local"
-  ADMIN_EMAIL: "admin@ds.com"
+  ADMIN_EMAIL: "admin@devshop.com"
   ADMIN_NAME: "DevShop Admin"
