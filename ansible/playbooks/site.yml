@@ -1,0 +1,26 @@
+# =============================================================================
+# DevShop — site.yml
+#
+# Full provisioning + deployment playbook. Configures a fresh EC2 (created by
+# Terraform) and deploys the DevShop application with Docker Compose.
+#
+# Responsibilities are kept separate:
+#   - Terraform provisions the AWS infrastructure (VPC/subnet/IGW/SG/EC2).
+#   - Ansible configures the host and deploys the application.
+#
+# Secrets come from the encrypted inventory/group_vars/all/vault.yml, which
+# Ansible decrypts automatically (run with a vault password):
+#   ansible-playbook -i inventory/hosts.ini --ask-vault-pass playbooks/site.yml
+#
+# Usage (from ansible/):
+#   ./scripts/deploy.sh
+# =============================================================================
+- name: Provision and deploy DevShop
+  hosts: devshop
+  become: true
+  gather_facts: true
+
+  roles:
+    - common
+    - docker
+    - devshop

@@ -28,7 +28,8 @@ devshop/
 │   ├── backend/          # Spring Boot REST API
 │   ├── frontend/         # Customer storefront
 │   └── admin-frontend/   # Admin dashboard
-└── terraform/            # Phase 4 — AWS infrastructure (Terraform)
+├── terraform/            # Phase 4 — AWS infrastructure (Terraform)
+└── ansible/              # Phase 5 — EC2 config + app deployment (Ansible)
 ```
 
 ## Quick start with Docker (recommended)
@@ -164,6 +165,38 @@ config needs updating — never the application.
 > **Important:** Terraform provisions a **new** EC2 instance and will not
 > destroy the existing manually-deployed server. See `terraform/README.md`
 > ("About the existing manually-deployed server") for import guidance.
+
+## Phase 5 — Ansible (EC2 configuration & application deployment)
+
+**Purpose:** after Terraform creates a fresh EC2, Ansible configures the host
+and deploys DevShop with Docker Compose, with minimal manual intervention.
+
+See [`ansible/README.md`](ansible/README.md) for full usage.
+
+Workflow:
+
+```bash
+# Terraform provisions infrastructure (Phase 4)
+cd terraform && terraform apply && terraform output -raw instance_public_ip
+
+# Ansible configures + deploys (Phase 5)
+cd ../ansible
+ansible-vault create inventory/group_vars/all/vault.yml   # encrypted secrets
+./scripts/deploy.sh                                        # generate inventory + run
+./scripts/deploy.sh --deploy-only                          # re-deploy after IP change
+```
+
+Ansible:
+- **common** — apt update, base packages, timezone
+- **docker** — idempotent Docker Engine + Compose v2 install (conflict-safe), enable on boot
+- **devshop** — clone/update `main`, **auto-detect the EC2 public IP**, render
+  `/opt/devshop/.env` from the **Ansible Vault**, `docker compose up -d --build`, health checks
+
+No IP is hard-coded: `SERVER_IP`/CORS are derived from the detected public IPv4
+each deploy, so an EC2 stop/start (IP change) needs only a re-run of
+`./scripts/deploy.sh --deploy-only` — never a source change. The compose stack
+uses `restart: unless-stopped` plus the named `devshop-postgres-data` volume, so
+PostgreSQL data survives redeploys and reboots.
 
 ## Running locally without Docker
 
