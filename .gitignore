@@ -16,6 +16,10 @@ ansible/vault/*.yml
 *.pem
 *.key
 
+# Kubernetes - real secret is git-ignored (only *.example.yaml templates commit)
+kubernetes/base/secret.yaml
+kubernetes/overlays/aws/secret.yaml
+
 # Node dependencies (all), build outputs
 node_modules/
 dist/

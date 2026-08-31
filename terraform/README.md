@@ -191,6 +191,16 @@ and the frontends talk to the backend only through Nginx `/api` reverse proxy
 - Detailed CloudWatch monitoring is `false` by default to avoid the per-instance
   metric charge.
 
+> **Phase 6 — Standard Kubernetes sizing:** For Phase 6 the same EC2 runs a
+> standard single-node Kubernetes cluster (kubeadm control plane + all DevShop
+> workloads + Argo CD + NGINX Ingress). A minimal `t2.micro` (1 vCPU / 1 GiB) is
+> too small for that. The default **`t3.small` (2 vCPU / 2 GiB)** is the practical
+> minimum for standard Kubernetes and is already the default here, so **no
+> Terraform change is normally required**. If you must resize, adjust
+> `instance_type` and document the reason — but do **not** substitute another
+> Kubernetes distribution (e.g. K3s) to avoid the resize; standard Kubernetes is
+> the Phase 6 requirement.
+
 ---
 
 ## Security considerations

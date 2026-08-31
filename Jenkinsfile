@@ -1,22 +1,30 @@
 // =============================================================================
-// DevShop - Jenkins Declarative Pipeline (Phase 5: CI/CD)
+// DevShop - Jenkins Declarative Pipeline (Phase 5 CI + Phase 6 GitOps CD)
 //
-// Flow: GitHub -> Checkout -> tests -> build -> Docker images -> Docker Hub
-//       -> deploy to EC2 (Docker Compose) -> health checks
+// Original Phase 5 flow deployed to EC2 via Docker Compose over SSH.
+// Phase 6 transitions deployment to GitOps:
+//   GitHub -> checkout -> tests -> build -> Docker images -> Docker Hub
+//     -> update the Kubernetes image tag in Git
+//       -> Argo CD detects the Git change -> syncs -> Kubernetes rollout
+//
+// Jenkins does NOT run kubectl apply as the normal deploy path (Phase 6
+// requirement). Argo CD performs the actual deployment from Git.
 //
 // Credential IDs referenced (create these in Jenkins Credentials; see
 // jenkins/README.md):
-//   * github-token           - (Optional) GitHub personal access token used for
-//                              SCM checkout if the repo is/becomes private.
+//   * github-token           - GitHub PAT used to push the Kubernetes manifest /
+//                              image-tag write-back to the repo (required).
 //   * dockerhub-credentials  - Docker Hub username + ACCESS TOKEN (not password).
-//   * devshop-ec2-ssh        - SSH private key used to deploy to the EC2 host.
+//   * devshop-ec2-ssh        - No longer used by this pipeline; kept for optional
+//                              read-only cluster checks (see README).
 //
 // Configurable values (set in Jenkins, NOT hard-coded in app source):
 //   * REGISTRY               - Docker Hub namespace (build parameter, default shown).
-//   * EC2_HOST               - Public IP / DNS of the EC2 target, set as a Jenkins
-//                              global environment variable (no hard-coded IP here).
-//   * EC2_USER               - SSH user for the EC2 host (defaults to ubuntu).
-//   * DEVSHOP_APP_DIR        - Repository directory on the EC2 host (default /opt/devshop).
+//   * BRANCH                 - Git branch to build/deploy (default main).
+//
+// GitOps loop prevention (requirement 27): the image-tag write-back commit is
+// tagged "[ci skip]" and the pipeline's Skip Guard stage aborts when a commit
+// only touches kubernetes/*. Configure the webhook to filter source paths too.
 //
 // Pipeline is gated to the `main` deployment branch for build/push/deploy; the
 // test stages may run on other branches. No secrets are stored in this file.
@@ -36,9 +44,6 @@ pipeline {
     environment {
         IMAGE_TAG  = "${BUILD_NUMBER}"                 // immutable, traceable version tag
         LATEST_TAG = 'latest'
-        EC2_HOST   = "${env.EC2_HOST ?: 'CHANGE_ME'}"  // provided by Jenkins global env
-        EC2_USER   = "${env.EC2_USER ?: 'ubuntu'}"
-        APP_DIR    = "${env.DEVSHOP_APP_DIR ?: '/opt/devshop'}"
         REGISTRY   = "${params.REGISTRY}"
         BRANCH     = "${params.BRANCH}"
 
@@ -55,6 +60,36 @@ pipeline {
     }
 
     stages {
+
+        // ---- 0. Skip guard: avoid the GitOps / infinite-loop -----------------
+        // This pipeline writes the desired image tag back into Git
+        // (kubernetes/overlays/aws/kustomization.yaml) so Argo CD can deploy.
+        // That write-back commit must NOT re-trigger this pipeline. We guard two
+        // ways:
+        //   * the write-back commit message contains "[ci skip]"; and
+        //   * if the HEAD commit only changes paths under kubernetes/, we SKIP
+        //     the entire build (path-based trigger exclusion).
+        // Configure the GitHub webhook to additionally filter to application
+        // source paths only (see kubernetes/README.md) for belt and braces.
+        stage('Skip Guard (GitOps loop prevention)') {
+            when { expression { params.BRANCH == params.BRANCH } } // always run
+            steps {
+                script {
+                    def changed = sh(
+                        script: "git diff --name-only HEAD~1 HEAD 2>/dev/null || true",
+                        returnStdout: true).tokenize('\n').collect { it.trim() }.findAll { it != '' }
+                    def onlyK8s = !changed.isEmpty() && changed.every { it.startsWith('kubernetes/') }
+                    if (onlyK8s) {
+                        echo "Commit touches only kubernetes/* - this is a GitOps manifest " +
+                             "write-back. Skipping CI to prevent an infinite loop."
+                        currentBuild.result = 'SUCCESS'
+                        error('Skipping build for GitOps-only manifest change.')
+                    } else {
+                        echo "Proceeding: relevant source changes detected."
+                    }
+                }
+            }
+        }
 
         // ---- 1. Checkout --------------------------------------------------
         stage('Checkout') {
@@ -162,31 +197,44 @@ pipeline {
             }
         }
 
-        // ---- 8. Deploy to EC2 (Docker Compose) -------------------------------
-        stage('Deploy to EC2') {
+        // ---- 8. Update the Kubernetes desired image tag in Git (GitOps) -------
+        // Phase 6: Jenkins does NOT kubectl apply. It publishes the images and
+        // then writes the immutable BUILD_NUMBER tag into the Kustomize overlay
+        // in Git. Argo CD (Phase 6) detects the Git change, syncs, and rolls out
+        // to Kubernetes. Manual kubectl is only for one-off/bootstrap, never the
+        // normal deploy path.
+        stage('Update Image Tag in Git (GitOps)') {
             when { expression { params.BRANCH == 'main' } }
             steps {
-                sshagent(['devshop-ec2-ssh']) {
+                withCredentials([gitUsernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_PASS'
+                )]) {
                     sh '''
                         set -e
-                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                            ${EC2_USER}@${EC2_HOST} \
-                            'DEVSHOP_APP_DIR=${APP_DIR} bash ${APP_DIR}/scripts/ci-deploy.sh ${REGISTRY} ${IMAGE_TAG}'
-                    '''
-                }
-            }
-        }
+                        FILE="kubernetes/overlays/aws/kustomization.yaml"
+                        # The overlay uses the Kustomize `images` block where `name:` and
+                        # `newTag:` are on separate lines. Point each image's newTag at the
+                        # immutable build for this pipeline run.
+                        for IMG in devshop-backend devshop-frontend devshop-admin-frontend; do
+                            awk -v img="amanmulla1/${IMG}" -v tag="${IMAGE_TAG}" '
+                                $0 ~ "name: " img "$" { want=1; print; next }
+                                want && /newTag:/ { sub(/newTag:.*/, "newTag: " tag); want=0 }
+                                { print }
+                            ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+                        done
 
-        // ---- 9. Health check --------------------------------------------------
-        stage('Health Check') {
-            when { expression { params.BRANCH == 'main' } }
-            steps {
-                sshagent(['devshop-ec2-ssh']) {
-                    sh '''
-                        set -e
-                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                            ${EC2_USER}@${EC2_HOST} \
-                            'DEVSHOP_APP_DIR=${APP_DIR} bash ${APP_DIR}/scripts/ci-health-check.sh'
+                        git add "$FILE"
+                        # "[ci skip]" + the Skip Guard stage + webhook path filter
+                        # together prevent the GitOps write-back from re-triggering
+                        # this pipeline (no infinite loop).
+                        git -c user.name="devshop-ci" -c user.email="ci@devshop.local" \
+                            commit -m "deploy(kubernetes): point DevShop images to tag ${IMAGE_TAG} [ci skip]"
+
+                        PUSH_URL="https://${GIT_USER}:${GIT_PASS}@$(echo "${GIT_URL}" | sed -E 's#https?://[^@]*@?##')"
+                        git push "${PUSH_URL}" HEAD:${BRANCH}
+                        echo "Pushed desired image tag ${IMAGE_TAG} to Git for Argo CD."
                     '''
                 }
             }
@@ -200,17 +248,18 @@ pipeline {
             echo "Build:         #${BUILD_NUMBER}"
             echo "Images:        ${BACKEND_IMAGE}:${IMAGE_TAG} / " +
                  "${FRONTEND_IMAGE}:${IMAGE_TAG} / ${ADMIN_FRONTEND_IMAGE}:${IMAGE_TAG}"
-            echo "Deployment:    EC2 (${EC2_HOST}) via Docker Compose"
+            echo "Deployment:    GitOps -> Argo CD -> Kubernetes (devshop namespace)"
             echo '--------------------------------------------------------------'
         }
         success {
-            echo 'PIPELINE SUCCEEDED: tests, builds, images, push, deploy and ' +
-                 'health checks all passed.'
+            echo 'PIPELINE SUCCEEDED: tests, builds, images, push, and Git image-tag ' +
+                 'update done. Argo CD will now sync Kubernetes from Git.'
         }
         failure {
-            echo 'PIPELINE FAILED. See console above. Roll back if needed with:'
-            echo "  ssh ${EC2_USER}@${EC2_HOST} " +
-                 "'scripts/ci-rollback.sh ${REGISTRY} <PREVIOUS_TAG>'"
+            echo 'PIPELINE FAILED. See console above.'
+            echo 'Roll back by updating the image tag in Git (Git-based rollback):'
+            echo '  edit kubernetes/overlays/aws/kustomization.yaml to an older tag, push;'
+            echo '  Argo CD syncs / self-heals back to the older image.'
             currentBuild.result = 'FAILURE'
         }
     }

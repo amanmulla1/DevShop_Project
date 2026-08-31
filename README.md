@@ -32,6 +32,7 @@ devshop/
 │   └── admin-frontend/   # Admin dashboard
 ├── scripts/               # Phase 5 — CI deploy / health check / rollback helpers
 ├── jenkins/               # Phase 5 — Jenkins setup docs
+├── kubernetes/            # Phase 6 — standard Kubernetes manifests + Argo CD (GitOps)
 ├── terraform/             # Phase 4 — AWS infrastructure (Terraform)
 └── ansible/               # Phase 7 — EC2 config + app deployment (Ansible)
 ```
@@ -199,6 +200,41 @@ without touching the PostgreSQL volume.
 
 See [`jenkins/README.md`](jenkins/README.md) for setup, credentials, webhook
 configuration, description of the flow, and rollback details.
+
+## Phase 6 — Kubernetes + Argo CD (standard K8s, GitOps)
+
+**Purpose:** run DevShop on a **standard Kubernetes (K8s)** cluster — not K3s —
+with **Argo CD** managing the desired state from Git.
+
+Standard single-node cluster on the Terraform EC2 (`t3.small`):
+
+- **Runtime:** containerd; **Control plane:** kubeadm/kubelet/kubectl;
+  **CNI:** Calico; **Ingress:** NGINX Ingress Controller.
+- **Storage:** local-path-provisioner (`local-path` StorageClass) for the
+  PostgreSQL PVC.
+- **Namespaces:** `devshop` (application) and `argocd` (GitOps controller).
+- **Application:** backend, customer-frontend, admin-frontend, postgres —
+  Deployments + Services + ConfigMap + Secret + probes + resource limits.
+
+GitOps flow (Jenkins no longer `kubectl apply`s for normal deploys):
+
+```
+Developer -> git push -> GitHub -> Jenkins (tests, build, Docker push to Docker Hub)
+  -> update image tag in kubernetes/overlays/aws/kustomization.yaml -> Git
+    -> Argo CD detects change -> syncs -> Kubernetes rolls out -> health checks
+```
+
+Rollback is Git-based (point the Kustomize `newTag` back to an older immutable
+image and push; Argo CD syncs). An `[ci skip]` + Skip-Guard/write-back
+protection avoids the GitOps loop. Secrets are kept out of Git (applied outside
+Argo CD) and no EC2 IP is hard-coded (configurable Ingress hosts).
+
+> **Standard Kubernetes (K8s), not K3s.** Single-node control-plane limitations
+> (no HA, shared control plane/worker, node failure ⇒ cluster down) are
+> documented — no production-HA claims.
+
+See [`kubernetes/README.md`](kubernetes/README.md) for install, verification,
+GitOps, self-heal/drift, rollback, and troubleshooting.
 
 ## Phase 7 — Ansible (EC2 configuration & application deployment)
 
