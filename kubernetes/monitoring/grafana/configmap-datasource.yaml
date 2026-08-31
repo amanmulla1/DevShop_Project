@@ -1,0 +1,31 @@
+# =============================================================================
+# DevShop - Grafana Prometheus datasource (auto-provisioned)
+#
+# Grafana provisioning automatically creates the Prometheus datasource on first
+# boot - no manual datasource setup. It points at the internal Prometheus
+# Service (prometheus.monitoring:9090) and is auto-generated with uid
+# "prometheus" so every dashboard can reference it by uid.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        uid: prometheus
+        url: http://prometheus.monitoring:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 30s
+          httpMethod: POST

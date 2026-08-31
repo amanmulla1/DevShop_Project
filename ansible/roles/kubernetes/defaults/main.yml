@@ -17,6 +17,7 @@ devshop_state_dir: /etc/devshop/state
 # Namespaces used by the cluster install.
 k8s_argocd_namespace: argocd
 k8s_devshop_namespace: devshop
+monitoring_namespace: monitoring
 
 # Public IP. Empty = auto-detect at deploy time (recommended).
 server_public_ip: ""
@@ -33,6 +34,12 @@ ingress_host_suffix: nip.io
 # Health check retries / delays.
 backend_health_retries: 30
 backend_health_delay: 10
+
+# Monitoring (Phase 8) bootstrap. Argo CD governs the monitoring resources from
+# Git (kubernetes/monitoring). This role only renders and applies the two
+# monitoring SECRETS outside Argo CD: the Grafana admin credentials and the
+# postgres-exporter DSN. Values come from the deploy.sh-generated store
+# (.devshop/secrets.yml) plus the group_vars db_username. Never stored in Git.
 
 # Kubernetes / Argo install script behaviour (root paths in this repo).
 k8s_script_dir: "{{ playbook_dir }}/../../kubernetes/scripts"

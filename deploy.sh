@@ -119,13 +119,16 @@ ensure_secrets() {
     GEN_DB="$(openssl rand -base64 24 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 20 || true)"
     GEN_JWT="$(openssl rand -base64 48 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 48 || true)"
     GEN_ADMIN="$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 16 || true)"
-    [ -n "$GEN_DB" ] && [ -n "$GEN_JWT" ] && [ -n "$GEN_ADMIN" ] || die "Could not generate secrets (openssl missing?)."
+    GEN_GRAFANA="$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 20 || true)"
+    [ -n "$GEN_DB" ] && [ -n "$GEN_JWT" ] && [ -n "$GEN_ADMIN" ] && [ -n "$GEN_GRAFANA" ] || die "Could not generate secrets (openssl missing?)."
     cat > "$SECRETS_FILE" <<EOF
 db_password: $GEN_DB
 jwt_secret: $GEN_JWT
 admin_password: $GEN_ADMIN
 admin_email: admin@devshop.com
 admin_name: DevShop Admin
+grafana_admin_user: admin
+grafana_admin_password: $GEN_GRAFANA
 EOF
     chmod 600 "$SECRETS_FILE"
     log "New secrets written (0600). Secrets are never printed or committed."

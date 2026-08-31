@@ -241,6 +241,105 @@
   changed_when: false
   failed_when: admin_fe.stdout != "200"
 
+# =============================================================================
+# PHASE 8 - Observability bootstrap (Prometheus + Grafana + exporters + GitOps)
+#
+# Argo CD governs all monitoring resources from Git (kubernetes/monitoring),
+# so the actual resources are applied by Argo CD. Ansible only:
+#   1. applies the two monitoring SECRETS outside Argo CD (never in Git),
+#   2. registers the Argo CD `monitoring` Application, and
+#   3. waits for it to sync + become healthy, then verifies the stack.
+# =============================================================================
+- name: Ensure monitoring namespace exists
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ monitoring_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: ns_ns
+  changed_when: false
+  failed_when: false
+
+- name: Render grafana-admin-secret (admin credentials, outside Argo CD)
+  ansible.builtin.template:
+    src: grafana-admin-secret.j2
+    dest: "{{ devshop_dir }}/kubernetes/monitoring/grafana/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Render postgres-exporter-secret (PostgreSQL DSN, outside Argo CD)
+  ansible.builtin.template:
+    src: postgres-exporter-secret.j2
+    dest: "{{ devshop_dir }}/kubernetes/monitoring/postgres-exporter/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Apply monitoring secrets (outside Argo CD)
+  ansible.builtin.shell: |
+    set -e
+    kubectl -n {{ monitoring_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/monitoring/grafana/secret.yaml
+    kubectl -n {{ monitoring_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/monitoring/postgres-exporter/secret.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  changed_when: true
+
+- name: Register the Argo CD 'monitoring' Application (GitOps-managed)
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ devshop_dir }}/kubernetes/argocd/application-monitoring.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Wait for the monitoring Application to become Synced + Healthy
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 90); do
+      STATE=$(kubectl -n {{ k8s_argocd_namespace }} get application monitoring \
+              -o jsonpath='{.status.sync.status} {.status.health.status}' 2>/dev/null || true)
+      case "$STATE" in
+        *"Synced"*"Healthy"*) echo "Argo CD monitoring: $STATE"; exit 0 ;;
+      esac
+      sleep 10
+    done
+    echo "ERROR: monitoring Application not Synced+Healthy after timeout"
+    kubectl -n {{ k8s_argocd_namespace }} get application monitoring -o yaml 2>/dev/null || true
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Verify Prometheus and Grafana deployments are Ready
+  ansible.builtin.command:
+    cmd: kubectl get deploy prometheus grafana -n {{ monitoring_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}:{.status.readyReplicas}:{.status.replicas}{"\n"}{end}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: mon_deploys
+  until: >
+    mon_deploys.stdout | regex_findall('1:1') | length >= 2
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Verify the DevShop backend Prometheus endpoint is returning metrics
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 30); do
+      if curl -s --max-time 5 http://127.0.0.1:8080/actuator/prometheus \
+         | grep -q '^http_server_requests_seconds_count'; then
+        echo "OK: backend /actuator/prometheus exposes HTTP metrics"; exit 0
+      fi
+      sleep 10
+    done
+    echo "ERROR: backend /actuator/prometheus not returning expected metrics"
+    exit 1
+  changed_when: false
+
 # --- Report final URLs ---------------------------------------------------------
 - name: Report deployment summary
   ansible.builtin.debug:
@@ -250,3 +349,6 @@
       - "  Admin:     http://{{ devshop_admin_host }}"
       - "  Backend:   http://{{ devshop_customer_host }}/api (via Nginx)"
       - "  Server IP: {{ devshop_public_ip }}"
+      - "  Grafana (NOT public):    kubectl -n {{ monitoring_namespace }} port-forward svc/grafana 3000:3000"
+      - "  Prometheus (NOT public): kubectl -n {{ monitoring_namespace }} port-forward svc/prometheus 9090:9090"
+      - "  Argo CD (NOT public):    kubectl -n argocd port-forward svc/argocd-server 8080:443"

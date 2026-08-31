@@ -104,6 +104,80 @@ pipeline {
             }
         }
 
+        // ---- 1b. Monitoring config validation (Phase 8) ---------------------
+        // Statically validates the observability configuration that Argo CD will
+        // deploy from Git (kubernetes/monitoring). Jenkins does NOT deploy or
+        // manage monitoring: Argo CD remains the CD authority. We only fail-fast
+        // on malformed YAML/JSON/rule files so a bad commit never reaches the
+        // cluster. Runs on every branch (cheap, read-only).
+        stage('Monitoring Config Validation') {
+            steps {
+                sh '''
+                    set -e
+                    echo "== Monitoring YAML validation =="
+                    python3 - <<'PY'
+                    import glob, sys, yaml
+                    files = glob.glob('kubernetes/monitoring/**/*.yaml', recursive=True)
+                    files += glob.glob('kubernetes/monitoring/**/*.yml', recursive=True)
+                    # Secret files are rendered by Ansible on the host, not committed;
+                    # ignore them if present in a local workspace.
+                    skip = ('grafana/secret.yaml', 'postgres-exporter/secret.yaml')
+                    errs = 0
+                    for f in sorted(set(files)):
+                        if f.endswith(skip):
+                            continue
+                        try:
+                            list(yaml.safe_load_all(open(f)))
+                            print('OK   ', f)
+                        except Exception as e:
+                            errs += 1
+                            print('FAIL ', f, '--', e)
+                    if errs:
+                        sys.exit('ERROR: %d monitoring YAML file(s) invalid' % errs)
+                    PY
+
+                    echo "== Grafana dashboard JSON validation =="
+                    python3 - <<'PY'
+                    import glob, json, sys
+                    files = glob.glob('kubernetes/monitoring/grafana/dashboards/*.json')
+                    errs = 0
+                    for f in sorted(files):
+                        try:
+                            d = json.load(open(f))
+                            assert 'panels' in d, 'missing top-level "panels"'
+                            assert d.get('schemaVersion'), 'missing schemaVersion'
+                            print('OK   ', f)
+                        except Exception as e:
+                            errs += 1
+                            print('FAIL ', f, '--', e)
+                    if errs:
+                        sys.exit('ERROR: %d dashboard(s) invalid' % errs)
+                    PY
+
+                    echo "== Prometheus rule file validation =="
+                    python3 - <<'PY'
+                    import yaml, sys
+                    path = 'kubernetes/monitoring/prometheus/configmap-rules.yaml'
+                    groups = []
+                    for doc in yaml.safe_load_all(open(path)):
+                        # The ConfigMap embeds one YAML rule file per `data` key
+                        # (recording.yml, alerts.yml).
+                        for s in doc.get('data', {}).values():
+                            inner = yaml.safe_load(s) or {}
+                            for g in inner.get('groups', []):
+                                for r in g.get('rules', []):
+                                    assert r.get('expr'), 'rule missing expr: %s' % r.get('alert')
+                                    if r.get('alert'):
+                                        sev = r.get('labels', {}).get('severity')
+                                        assert sev in ('critical', 'warning', 'info'), \
+                                            'severity must be critical/warning/info: %s' % r.get('alert')
+                                groups.append(g.get('name'))
+                    print('OK   rules groups:', ', '.join(sorted(set(groups))))
+                    PY
+                '''
+            }
+        }
+
         // ---- 2. Backend tests ---------------------------------------------
         stage('Backend Tests') {
             steps {

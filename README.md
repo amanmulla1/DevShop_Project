@@ -22,21 +22,21 @@ DevShop is composed of three independently deployable applications:
 ```
 devshop/
 ├── README.md
-├── deploy.sh               # Phase 7 — ONE-COMMAND deploy (Terraform→Ansible→K8s→Argo CD)
+├── deploy.sh               # Phase 7+8 — ONE-COMMAND deploy (Terraform→Ansible→K8s→Argo CD→Monitoring)
 ├── destroy.sh              # Phase 7 — separate, confirm-gated teardown
 ├── docker-compose.yml
 ├── docker-compose.ci.yml   # Phase 5 — registry-image overlay for CI deployment
 ├── .env.example
-├── Jenkinsfile             # Phase 5 — CI/CD pipeline (Jenkins)
+├── Jenkinsfile             # Phase 5+8 — CI/CD pipeline (incl. monitoring config validation)
 ├── application/
-│   ├── backend/          # Spring Boot REST API
+│   ├── backend/          # Spring Boot REST API (exposes /actuator/prometheus)
 │   ├── frontend/         # Customer storefront
 │   └── admin-frontend/   # Admin dashboard
 ├── scripts/               # Phase 5 — CI deploy / health check / rollback helpers
 ├── jenkins/               # Phase 5 — Jenkins setup docs
-├── kubernetes/            # Phase 6 — standard Kubernetes manifests + Argo CD (GitOps)
+├── kubernetes/            # Phase 6+8 — K8s manifests, Argo CD (GitOps), monitoring stack
 ├── terraform/             # Phase 4 — AWS infrastructure (Terraform)
-└── ansible/               # Phase 7 — EC2/K8s/Argo CD bootstrap + deploy orchestration
+└── ansible/               # Phase 7+8 — EC2/K8s/Argo CD bootstrap + deploy orchestration
 ```
 
 ## Quick start with Docker (recommended)
@@ -321,8 +321,51 @@ After that: **`./deploy.sh`** is all you run.
 - `./destroy.sh` tears down the AWS infrastructure **only with explicit
   confirmation**; it never runs as part of deploy.
 
-See [`ansible/README.md`](ansible/README.md) and
-[`kubernetes/README.md`](kubernetes/README.md) for details.
+See [`ansible/README.md`](ansible/README.md),
+[`kubernetes/README.md`](kubernetes/README.md), and
+[`kubernetes/monitoring/README.md`](kubernetes/monitoring/README.md) for
+details.
+
+## Phase 8 — Observability (Prometheus + Grafana + exporters, GitOps-managed)
+
+An **open-source** monitoring stack that is part of the SAME one-command flow:
+`./deploy.sh` now also provisions Prometheus, Grafana, Alertmanager,
+node-exporter, kube-state-metrics, and postgres-exporter automatically.
+
+- **GitOps-managed**: Argo CD applies the whole stack from
+  `kubernetes/monitoring/` (the `monitoring` Application) with auto-sync,
+  self-heal, and prune.
+- **7 Grafana dashboards** auto-provisioned (no manual import): Executive
+  Overview, K8s Cluster, EC2/Node, App/API, PostgreSQL, Workloads, and CI/CD.
+- **Prometheus alert + recording rules** with meaningful `critical/warning/info`
+  severities (15-day retention, PVC-backed).
+- **Secrets stay out of Git**: Grafana admin + postgres-exporter DSN are
+  rendered by Ansible **outside** Argo CD from the git-ignored
+  `.devshop/secrets.yml` (never `admin/admin`, never committed, never pruned).
+- **Factory-closed**: Prometheus/Grafana/Alertmanager are ClusterIP-only (access
+  via `kubectl port-forward`); Grafana requires authentication.
+- **Jenkins** validates monitoring YAML/JSON/rules on every build (read-only;
+  Argo CD remains the deploy authority).
+
+Additions to the one-command flow:
+
+```
+ 10. wait for Argo CD to sync the DevShop app (GitHub → Argo CD → Kubernetes)
+ 11. apply monitoring secrets (outside Argo CD) + register the monitoring App
+ 12. wait for the monitoring stack Synced+Healthy; verify targets / /actuator/prometheus
+ 13. print final URLs + Grafana/Prometheus port-forward access
+```
+
+To view Grafana after a deploy:
+
+```bash
+kubectl -n monitoring port-forward svc/grafana 3000:3000
+# open http://localhost:3000 (auth: see .devshop/secrets.yml grafana_admin_*)
+```
+
+Extensive documentation — architecture, each dashboard, every alert,
+recording rules, verification, and recovery — is in
+[`kubernetes/monitoring/README.md`](kubernetes/monitoring/README.md).
 
 ## Running locally without Docker
 

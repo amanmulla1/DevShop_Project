@@ -1,0 +1,44 @@
+# =============================================================================
+# DevShop - Kustomize base for the monitoring namespace
+#
+# Aggregates ALL observability resources (Prometheus, Grafana, Alertmanager,
+# node-exporter, kube-state-metrics, postgres-exporter) that Argo CD manages
+# from Git. Argo CD governs these via the `monitoring` Application ->
+# kubernetes/monitoring path (see argocd/application-monitoring.yaml).
+#
+# Secrets (e.g. the Grafana admin password) are intentionally NOT listed here.
+# They are created OUTSIDE Argo CD by the Ansible bootstrap (same pattern as the
+# devshop-secret), so they are never committed and never pruned. See
+# kubernetes/monitoring/grafana/secret.example.yaml for the shape.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - prometheus/pvc.yaml
+  - prometheus/configmap-prometheus.yaml
+  - prometheus/configmap-rules.yaml
+  - prometheus/serviceaccount.yaml
+  - prometheus/clusterrole.yaml
+  - prometheus/clusterrolebinding.yaml
+  - prometheus/deployment.yaml
+  - prometheus/service.yaml
+  - alertmanager/configmap-alertmanager.yaml
+  - alertmanager/deployment.yaml
+  - alertmanager/service.yaml
+  - node-exporter/daemonset.yaml
+  - node-exporter/service.yaml
+  - kube-state-metrics/deployment.yaml
+  - kube-state-metrics/service.yaml
+  - kube-state-metrics/serviceaccount.yaml
+  - postgres-exporter/configmap-queries.yaml
+  - postgres-exporter/deployment.yaml
+  - postgres-exporter/service.yaml
+  - grafana/pvc.yaml
+  - grafana/configmap-grafana.yaml
+  - grafana/configmap-datasource.yaml
+  - grafana/configmap-dashboard-provider.yaml
+  - grafana/configmap-dashboards.yaml
+  - grafana/deployment.yaml
+  - grafana/service.yaml

@@ -1,0 +1,54 @@
+# =============================================================================
+# DevShop - Grafana configuration (grafana.ini)
+#
+# Non-secret settings only. The admin credentials come from the
+# grafana-admin-secret (rendered by Ansible, outside Argo CD) via environment
+# variables GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD. admin/admin is
+# never hard-coded.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+data:
+  grafana.ini: |
+    [server]
+    root_url = %(protocol)s://%(domain)s:3000/
+    serve_from_sub_path = false
+
+    [security]
+    # Strict security: only allow the Grafana admin to create/update datasources
+    # and dashboards. Disable anonymous access (auth required).
+    allow_embedding = false
+    cookie_secure = false
+    disable_gravatar = true
+
+    [auth.anonymous]
+    enabled = false
+
+    [auth.basic]
+    enabled = true
+
+    [users]
+    # Operators sign in; no open sign-up.
+    allow_sign_up = false
+    auto_assign_org_role = Viewer
+
+    [dashboards]
+    default_home_dashboard_path = /var/lib/grafana/dashboards/overview.json
+
+    [analytics]
+    reporting_enabled = false
+    check_for_updates = true
+
+    [snapshots]
+    external_enabled = false
+
+    [log]
+    mode = console
+    level = info

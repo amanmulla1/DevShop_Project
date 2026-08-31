@@ -23,6 +23,9 @@ ansible/vault/*.yml
 # Kubernetes - real secret is git-ignored (only *.example.yaml templates commit)
 kubernetes/base/secret.yaml
 kubernetes/overlays/aws/secret.yaml
+# Monitoring secrets rendered by Ansible on the host (outside Argo CD / Git).
+kubernetes/monitoring/grafana/secret.yaml
+kubernetes/monitoring/postgres-exporter/secret.yaml
 
 # Node dependencies (all), build outputs
 node_modules/

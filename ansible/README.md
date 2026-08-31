@@ -1,13 +1,14 @@
-# DevShop — Phase 7: Ansible (EC2 + Kubernetes + Argo CD bootstrap)
+# DevShop — Phase 7+8: Ansible (EC2 + Kubernetes + Argo CD + Observability bootstrap)
 
 > **Recommended entry point is the root ONE-COMMAND orchestration** — `./deploy.sh`
 > (see the root `README.md`). It chains Terraform → Ansible → Kubernetes → Argo CD
-> → health checks → final URLs. This page documents the Ansible layer.
+> → **monitoring** → health checks → final URLs. This page documents the Ansible layer.
 
 Ansible configures the Terraform-provisioned EC2 host, installs **standard
 Kubernetes** (containerd/kubeadm/kubelet/kubectl/Calico/Metrics), installs
-**Argo CD**, applies the DevShop Secret/ConfigMap, and waits for Argo CD to sync
-the DevShop application.
+**Argo CD**, applies the DevShop Secret/ConfigMap, waits for Argo CD to sync
+the DevShop application, and (Phase 8) bootstraps the **observability stack**
+(Prometheus + Grafana + exporters) via Argo CD.
 
 ```
 ./deploy.sh
@@ -22,7 +23,10 @@ the DevShop application.
        └─ kubernetes : install standard K8s + Argo CD,
                        apply devshop-secret (outside Argo CD),
                        patch ingress/CORS to detected IP,
-                       wait for Argo CD Synced+Healthy, health checks, URLs
+                       wait for Argo CD Synced+Healthy, health checks, URLs,
+                       Phase 8: apply monitoring secrets (outside Argo CD),
+                       register the monitoring Argo CD Application,
+                       wait Prometheus/Grafana Healthy, verify targets
 ```
 
 > **Scope:** Ansible configures the host and bootstraps Kubernetes + Argo CD.
@@ -116,7 +120,7 @@ ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/site.yml
 | Role     | Responsibility |
 |----------|----------------|
 | `common` | apt update, base packages (curl, git, ca-certificates, ...), timezone |
-| `kubernetes` | Detect public IP, clone `main`, install **standard Kubernetes** (containerd/kubeadm/kubelet/kubectl + Calico CNI + Metrics Server), install **Argo CD**, apply `devshop-secret` (outside Argo CD), patch ingress/CORS to detected IP, wait for Argo CD `Synced`+`Healthy`, verify nodes/pods, health-check the app, print URLs |
+| `kubernetes` | Detect public IP, clone `main`, install **standard Kubernetes** (containerd/kubeadm/kubelet/kubectl + Calico CNI + Metrics Server), install **Argo CD**, apply `devshop-secret` (outside Argo CD), patch ingress/CORS to detected IP, wait for Argo CD `Synced`+`Healthy`, verify nodes/pods, health-check the app, print URLs. **Phase 8:** apply `grafana-admin-secret` + `postgres-exporter-secret` (outside Argo CD), register the `monitoring` Argo CD Application, wait Prometheus/Grafana Healthy, verify scrape targets + `/actuator/prometheus`, print Grafana/Prometheus port-forward access |
 | `docker`, `devshop` | *Optional / legacy* Phase 5 roles retained for Docker Compose deploys — not used by the Phase 7 one-command path |
 
 ### Kubernetes bootstrap
@@ -138,6 +142,25 @@ Argo CD (namespace `argocd`) watches the DevShop repo
 is never pruned. After bootstrap, application changes flow GitHub → Argo CD →
 Kubernetes.
 
+### Observability bootstrap (Phase 8)
+The monitoring stack (Prometheus, Grafana, Alertmanager, node-exporter,
+kube-state-metrics, postgres-exporter) is itself **GitOps-managed** by a second
+Argo CD Application (`monitoring` → `kubernetes/monitoring`, namespace
+`monitoring`). This role only:
+
+1. renders + applies the two monitoring Secrets **outside** Argo CD —
+   `grafana-admin-secret` (admin creds) and `postgres-exporter-secret` (the
+   PostgreSQL DSN) — from the git-ignored `.devshop/secrets.yml` store;
+2. applies `kubernetes/argocd/application-monitoring.yaml` (auto-sync,
+   self-heal, prune) so Argo CD deploys the whole stack from Git;
+3. waits for the `monitoring` Application `Synced`+`Healthy` and verifies
+   Prometheus/Grafana are Ready and the backend `/actuator/prometheus` is
+   producing metrics.
+
+Grafana/Prometheus are ClusterIP-only (port-forward access), so the secrets and
+the UI never need to be public. See
+[`../kubernetes/monitoring/README.md`](../kubernetes/monitoring/README.md).
+
 ---
 
 ## Configuration references
@@ -146,8 +169,11 @@ Kubernetes.
   timezone, db name/user.
 - `ansible/roles/kubernetes/defaults/main.yml` — namespaces, IP-detection
   endpoints, ingress suffix (nip.io), k8s version, CNI pod CIDR, Argo CD
-  version, health poll settings.
+  version, health poll settings, monitoring namespace.
 - `ansible/roles/kubernetes/templates/secret.yaml.j2` — the in-cluster Secret.
+- `ansible/roles/kubernetes/templates/grafana-admin-secret.j2`,
+  `postgres-exporter-secret.j2` — the two monitoring Secrets rendered **outside**
+  Argo CD (git-ignored after render).
 
 ---
 
@@ -156,6 +182,7 @@ Kubernetes.
 - SSH key never committed; supplied via `--private-key` or inventory var.
 - Secrets generated/persisted with `no_log` + `chmod 600`; never written to
   Git (`.devshop/` is git-ignored), never printed, never on the command line.
+  The Grafana admin + postgres-exporter secrets follow the same pattern.
 - The Terraform security group is the network boundary; Ansible does not enable
   UFW blindly (could lock out SSH).
 - Host-key checking is disabled for this learning environment (see `ansible.cfg`).

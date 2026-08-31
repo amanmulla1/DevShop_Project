@@ -1,0 +1,52 @@
+# =============================================================================
+# DevShop - kube-state-metrics Deployment
+#
+# Exports Kubernetes OBJECT STATE (not resource usage): deployment replicas,
+# pod phase/readiness, daemonset/statefulset/job status, namespace info, PVC
+# state, node conditions. Used by the Kubernetes dashboards and alerts. It does
+# not duplicate the Metrics Server (which serves `kubectl top`/HPA resource
+# metrics) - kube-state-metrics exposes a different, complementary signal.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10

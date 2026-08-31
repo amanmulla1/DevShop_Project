@@ -1,0 +1,24 @@
+# =============================================================================
+# DevShop - Alertmanager Service (internal ClusterIP)
+#
+# Referenced by Prometheus as the alertmanager target (via alerting config in
+# prometheus.yml if enabled). Not exposed publicly - use kubectl port-forward:
+#   kubectl -n monitoring port-forward svc/alertmanager 9093:9093
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: 9093
