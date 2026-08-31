@@ -1,0 +1,26 @@
+# Terraform state and local artifacts — DO NOT commit.
+# State may contain sensitive infrastructure information.
+
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# User-specific / local-only files
+.terraformrc
+terraform.rc
+
+# Private keys and any secrets — never commit
+*.pem
+*.key

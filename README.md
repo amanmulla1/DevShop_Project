@@ -24,10 +24,11 @@ devshop/
 ├── README.md
 ├── docker-compose.yml
 ├── .env.example
-└── application/
-    ├── backend/          # Spring Boot REST API
-    ├── frontend/         # Customer storefront
-    └── admin-frontend/   # Admin dashboard
+├── application/
+│   ├── backend/          # Spring Boot REST API
+│   ├── frontend/         # Customer storefront
+│   └── admin-frontend/   # Admin dashboard
+└── terraform/            # Phase 4 — AWS infrastructure (Terraform)
 ```
 
 ## Quick start with Docker (recommended)
@@ -113,6 +114,56 @@ The `docker-compose.yml` builds each service from its own `Dockerfile`:
 - `application/backend/Dockerfile` — multi-stage Maven build (Java 21)
 - `application/frontend/Dockerfile` — Node build served by Nginx
 - `application/admin-frontend/Dockerfile` — Node build served by Nginx
+
+## Phase 4 — Terraform (AWS infrastructure)
+
+**Purpose:** provision the AWS infrastructure required to run the Dockerized
+DevShop stack. Terraform creates the infrastructure only; application
+deployment remains a separate `git` + `docker compose` step.
+
+Terraform provisions:
+- **VPC** + public **subnet**
+- **Internet Gateway** + public **route table** (0.0.0.0/0 → IGW)
+- **Security group** (SSH 22 from your IP; 5173/5174/8080; PostgreSQL 5432 closed)
+- **EC2 instance** (Ubuntu 24.04, installs Docker + Compose via user data)
+- **IAM** instance role/profile (least privilege, no AWS API policies yet)
+
+The EC2 uses its **normal public IPv4** (Free Tier / minimal cost — no Elastic IP,
+NAT Gateway, Load Balancer, RDS, or EKS).
+
+See [`terraform/README.md`](terraform/README.md) for full usage.
+
+### Terraform commands
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # set region, key_pair_name, admin_cidr
+terraform init
+terraform fmt -recursive
+terraform validate
+terraform plan
+terraform apply
+terraform output instance_public_ip            # the app address (normal public IPv4)
+```
+
+### Public IPv4 and runtime configuration
+
+The instance's public IPv4 is an infrastructure **output**, never hard-coded into
+source. At deploy time you set the runtime env from it:
+
+```
+SERVER_IP=<instance_public_ip>
+CORS_ALLOWED_ORIGINS=http://<instance_public_ip>:5173,http://<instance_public_ip>:5174
+```
+
+Because CORS is env-driven and the frontends call the backend only through the
+Nginx `/api` reverse proxy with relative URLs, no IP appears in any source file.
+If the public IPv4 changes (on stop/start), only this deployment/environment
+config needs updating — never the application.
+
+> **Important:** Terraform provisions a **new** EC2 instance and will not
+> destroy the existing manually-deployed server. See `terraform/README.md`
+> ("About the existing manually-deployed server") for import guidance.
 
 ## Running locally without Docker
 
