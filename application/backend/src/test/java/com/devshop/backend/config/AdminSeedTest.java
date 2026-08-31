@@ -67,4 +67,26 @@ class AdminSeedTest {
         assertTrue(passwordEncoder.matches(configuredPassword, refreshed.getPasswordHash()),
                 "Existing admin password should be re-hashed to match the configured ADMIN_PASSWORD");
     }
+
+    @Test
+    void staleEmailIsMigratedToConfiguredEmailWithoutDuplicate() throws Exception {
+        // Simulate the AWS state: a legacy admin row under an older default email
+        // (e.g. admin@devshop.com) with no row under the configured target email.
+        Admin legacy = adminRepository.findByEmail("seedadmin@test.com").orElseThrow();
+        legacy.setEmail("admin@devshop.com");
+        legacy.setPasswordHash(passwordEncoder.encode("SomeOldPassword123!"));
+        adminRepository.save(legacy);
+
+        assertEquals(false, adminRepository.findByEmail("seedadmin@test.com").isPresent(),
+                "Precondition: no admin exists yet under the configured email");
+
+        seedAdmin.run();
+
+        assertEquals(1, adminRepository.count(),
+                "Migration must leave exactly one admin (no duplicate, no data loss)");
+
+        Admin migrated = adminRepository.findByEmail("seedadmin@test.com").orElseThrow();
+        assertTrue(passwordEncoder.matches(configuredPassword, migrated.getPasswordHash()),
+                "Migrated admin password should be re-hashed to match the configured ADMIN_PASSWORD");
+    }
 }

@@ -35,7 +35,7 @@ public class DataInitializer {
     private static final Logger log = LoggerFactory.getLogger(DataInitializer.class);
 
     @org.springframework.beans.factory.annotation.Value("${app.admin.email}")
-    private String appAdminEmail = "admin@devshop.com";
+    private String appAdminEmail = "admin@ds.com";
 
     @org.springframework.beans.factory.annotation.Value("${app.admin.name}")
     private String appAdminName = "DevShop Admin";
@@ -209,22 +209,44 @@ public class DataInitializer {
     CommandLineRunner seedAdmin(AdminRepository repository,
                                 org.springframework.security.crypto.password.PasswordEncoder passwordEncoder) {
         return args -> {
-            String normalizedEmail = appAdminEmail.trim().toLowerCase();
-            Admin admin = repository.findByEmail(normalizedEmail).orElse(null);
-            if (admin == null) {
-                Admin created = new Admin(normalizedEmail, appAdminName, passwordEncoder.encode(appAdminPassword));
-                repository.save(created);
-                log.info("Bootstrap admin seeded: {}", normalizedEmail);
-            } else if (!passwordEncoder.matches(appAdminPassword, admin.getPasswordHash())) {
-                // Env-driven provisioning: keep the configured ADMIN_PASSWORD
-                // authoritative for the bootstrap admin so a password change in
-                // .env applies to an already-seeded row.
-                admin.setPasswordHash(passwordEncoder.encode(appAdminPassword));
-                repository.save(admin);
-                log.info("Bootstrap admin password synced to environment: {}", normalizedEmail);
-            } else {
-                log.info("Bootstrap admin already present with matching password: {}", normalizedEmail);
+            String targetEmail = appAdminEmail.trim().toLowerCase();
+            Admin admin = repository.findByEmail(targetEmail).orElse(null);
+            if (admin != null) {
+                if (!passwordEncoder.matches(appAdminPassword, admin.getPasswordHash())) {
+                    // Env-driven provisioning: keep the configured ADMIN_PASSWORD
+                    // authoritative for the bootstrap admin so a password change in
+                    // .env applies to an already-seeded row.
+                    admin.setPasswordHash(passwordEncoder.encode(appAdminPassword));
+                    repository.save(admin);
+                    log.info("Bootstrap admin password synced to environment: {}", targetEmail);
+                } else {
+                    log.info("Bootstrap admin already present with matching password: {}", targetEmail);
+                }
+                return;
             }
+
+            // No admin exists under the configured target email. In this
+            // development deployment a stale admin was previously seeded under a
+            // different default email (e.g. admin@devshop.com). Migrate that row
+            // to the configured email so exactly one admin@ds.com always exists.
+            // The seeder only ever creates a single admin, so the first row with a
+            // non-target email is the legacy one to update in place.
+            Admin stale = repository.findAll().stream()
+                    .filter(a -> !a.getEmail().trim().equalsIgnoreCase(targetEmail))
+                    .findFirst()
+                    .orElse(null);
+            if (stale != null) {
+                String previousEmail = stale.getEmail();
+                stale.setEmail(targetEmail);
+                stale.setPasswordHash(passwordEncoder.encode(appAdminPassword));
+                repository.save(stale);
+                log.info("Bootstrap admin migrated from {} to {}", previousEmail, targetEmail);
+                return;
+            }
+
+            Admin created = new Admin(targetEmail, appAdminName, passwordEncoder.encode(appAdminPassword));
+            repository.save(created);
+            log.info("Bootstrap admin seeded: {}", targetEmail);
         };
     }
 
