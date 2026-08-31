@@ -1,33 +1,45 @@
-# DevShop — Phase 5: Ansible (EC2 configuration & application deployment)
+# DevShop — Phase 7: Ansible (EC2 + Kubernetes + Argo CD bootstrap)
 
-Ansible configures the Terraform-provisioned EC2 host and deploys the DevShop
-application with Docker Compose.
+> **Recommended entry point is the root ONE-COMMAND orchestration** — `./deploy.sh`
+> (see the root `README.md`). It chains Terraform → Ansible → Kubernetes → Argo CD
+> → health checks → final URLs. This page documents the Ansible layer.
+
+Ansible configures the Terraform-provisioned EC2 host, installs **standard
+Kubernetes** (containerd/kubeadm/kubelet/kubectl/Calico/Metrics), installs
+**Argo CD**, applies the DevShop Secret/ConfigMap, and waits for Argo CD to sync
+the DevShop application.
 
 ```
-Terraform apply
-      ↓  (provisions VPC/subnet/IGW/SG/EC2 — infrastructure only)
-terraform output -raw instance_public_ip
-      ↓
-generate Ansible inventory
-      ↓
-ansible-playbook site.yml
-      ↓  (common -> docker -> devshop)
-Docker installed + enabled → repo cloned → .env rendered → compose up → health checks
+./deploy.sh
+  1. prerequisite checks
+  2. generate persistent secrets   (once; reused, never printed/committed)
+  3. Terraform init/validate/apply         → AWS infrastructure
+  4. terraform output -raw instance_public_ip
+  5. generate Ansible inventory     (automatic — nothing copied by hand)
+  6. ansible-playbook site.yml
+       (common -> kubernetes)
+       ├─ common     : base packages + timezone
+       └─ kubernetes : install standard K8s + Argo CD,
+                       apply devshop-secret (outside Argo CD),
+                       patch ingress/CORS to detected IP,
+                       wait for Argo CD Synced+Healthy, health checks, URLs
 ```
 
-> **Scope:** host configuration + application deployment only. Ansible does not
-> provision AWS infrastructure (that stays with Terraform). No Kubernetes,
-> Jenkins, or Prometheus/Grafana in this phase.
+> **Scope:** Ansible configures the host and bootstraps Kubernetes + Argo CD.
+> It does **not** provision AWS infrastructure (that stays with Terraform) and it
+> is **not** the permanent CD engine — **Argo CD** drives the application
+> deployment (GitHub → Argo CD → Kubernetes). Jenkins remains CI (Phase 5).
 
 ---
 
 ## Prerequisites
 
-- **Ansible** (>= 2.15; `ansible-core` + the built-in collections suffice — no
-  third-party collections are required)
-- The **Terraform stack from Phase 4 applied**, producing an EC2 instance
-- An **SSH private key** (the `.pem`) for the instance's `ubuntu` user
-- The EC2 **public IPv4** (from `terraform output -raw instance_public_ip`)
+- Linux shell / **WSL** with `terraform` and `ansible` installed, and an SSH
+  private key (`*.pem`) for the EC2 `ubuntu` user.
+- AWS credentials configured and `terraform/terraform.tfvars` set (key pair name,
+  admin CIDR). Ansible itself needs only the **public IP** of the instance —
+  the root `./deploy.sh` generates the inventory automatically from
+  `terraform output`.
 
 Install Ansible (a few options):
 
@@ -60,81 +72,42 @@ change on stop/start. The inventory is therefore **generated, not hard-coded**:
 ./scripts/generate_inventory.sh
 ```
 
-This writes `inventory/hosts.ini` using `terraform output -raw instance_public_ip`.
-The committed `inventory/hosts.ini.example` documents the expected format.
-
-Connection defaults live in `inventory/group_vars/all/main.yml`
-(`ansible_user: ubuntu`, SSH key path, Python interpreter, repo URL/branch, etc.).
+`./deploy.sh` also writes `inventory/hosts.ini` automatically (step 5). The
+committed `inventory/hosts.ini.example` documents the expected format.
+Connection defaults live in `inventory/group_vars/all/main.yml`.
 
 ---
 
-## Vault setup
+## Secrets — how they are supplied
 
-Sensitive values (`DB_PASSWORD`, `JWT_SECRET`, `ADMIN_PASSWORD`, ...) are
-stored in the **encrypted** `inventory/group_vars/all/vault.yml`. See
-`vault/README.md` for the exact keys and create-command.
+The root `./deploy.sh` generates strong secrets **once** into a git-ignored
+`.devshop/secrets.yml` (mode 0600) on the control node and passes them to Ansible
+with `--extra-vars @<file>` — nothing appears on the command line. The secrets
+are also persisted on the EC2 host at `/etc/devshop/state/` (0600) for reuse
+across reruns. They are never printed or committed.
 
-```bash
-cd ansible
-ansible-vault create inventory/group_vars/all/vault.yml --vault-id devshop@prompt
-```
-
-The real `vault.yml` is git-ignored. Only the `*.example` (placeholders) is
-committed — **no plaintext secrets** are ever in Git.
+> An alternative (optional) encrypted-vault path is still supported: see
+> `inventory/group_vars/all/vault.yml.example`. If you set
+> `DEVSHOP_VAULT_FILE`, `deploy.sh` uses `--vault-password-file` instead.
 
 ---
 
-## Commands
+## Commands (Ansible layer only)
 
 ```bash
 cd ansible
 
-# 1) Validate before deploying
-ansible-playbook -i inventory/hosts.ini --ask-vault-pass --syntax-check playbooks/site.yml
-ansible-lint playbooks/site.yml            # if ansible-lint is installed
+# Validate
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/site.yml
 
-# 2) Dry run (check mode) — best-effort on a fresh host
-ansible-playbook -i inventory/hosts.ini --ask-vault-pass --check playbooks/site.yml
-
-# 3) Full provision + deploy
-./scripts/deploy.sh                         # or manually:
-ansible-playbook -i inventory/hosts.ini --ask-vault-pass \
-    --private-key ~/.ssh/devshop.pem playbooks/site.yml
-
-# 4) Re-deploy only (after an IP change or a new commit) without host changes
-./scripts/deploy.sh --deploy-only
-#    i.e. ansible-playbook -i inventory/hosts.ini --ask-vault-pass playbooks/deploy.yml
-```
-
-Non-interactive vault password:
-
-```bash
-DEVSHOP_VAULT_FILE=~/.secrets/devshop.vault-pass DEVSHOP_SSH_KEY=~/.ssh/devshop.pem ./scripts/deploy.sh
-```
-
----
-
-## Example end-to-end workflow
-
-```bash
-# 1. Provision infrastructure
-cd terraform
-terraform init
-terraform validate
-terraform plan
-terraform apply
-terraform output -raw instance_public_ip   # -> the EC2 public IPv4
-
-# 2. Deploy the application
-cd ../ansible
-ansible-vault create inventory/group_vars/all/vault.yml
+# Full bootstrap (K8s + Argo CD + DevShop sync)
 ./scripts/deploy.sh
 
-# 3. Verify
-curl http://<public-ip>:5173/               # customer
-curl http://<public-ip>:5174/               # admin
-curl http://<public-ip>:5174/api/products   # products via Nginx /api
+# Re-run Kubernetes/Argo CD + sync only (idempotent redeploy after IP/new commit)
+./scripts/deploy.sh --deploy-only
 ```
+
+> Prefer the root `./deploy.sh` — it does Terraform + inventory + Ansible in one.
 
 ---
 
@@ -143,59 +116,59 @@ curl http://<public-ip>:5174/api/products   # products via Nginx /api
 | Role     | Responsibility |
 |----------|----------------|
 | `common` | apt update, base packages (curl, git, ca-certificates, ...), timezone |
-| `docker` | Idempotent Docker Engine + Compose v2 install (conflict-safe), enable on boot, docker group |
-| `devshop`| Clone/update repo, auto-detect public IP, render `.env` (vault), `docker compose up -d --build`, health checks |
+| `kubernetes` | Detect public IP, clone `main`, install **standard Kubernetes** (containerd/kubeadm/kubelet/kubectl + Calico CNI + Metrics Server), install **Argo CD**, apply `devshop-secret` (outside Argo CD), patch ingress/CORS to detected IP, wait for Argo CD `Synced`+`Healthy`, verify nodes/pods, health-check the app, print URLs |
+| `docker`, `devshop` | *Optional / legacy* Phase 5 roles retained for Docker Compose deploys — not used by the Phase 7 one-command path |
 
-### Compose v2 conflict handling
-The docker role detects whether `docker compose` already works and only installs
-Compose when needed, choosing the method that matches the engine (Docker repo
-plugin for `docker-ce`, `docker-compose-v2` for Ubuntu `docker.io`) — avoiding the
-earlier dpkg file-conflict. Idempotent: a second run makes no changes.
+### Kubernetes bootstrap
+Installs upstream software via the existing `kubernetes/scripts/*` installers
+(`install-kubernetes.sh`, `install-storage.sh`, `install-ingress.sh`,
+`install-argocd.sh`), which are idempotent. Standard Kubernetes only — no
+K3s/MicroK8s/Minikube/Kind.
 
-### Server public IP detection
-`devshop` auto-detects the EC2 public IPv4 (`https://api.ipify.org`) unless
-`server_public_ip` is pinned via `--extra-vars`. The value is templated into
-`/opt/devshop/.env` as `SERVER_IP`; CORS origins are derived from it by
-`docker-compose.yml`. No IP is hard-coded in React/Java/Docker sources.
+### IP detection & CORS
+`kubernetes` auto-detects the EC2 public IPv4 (`api.ipify.org` / `ifconfig.me`)
+unless `server_public_ip` is set via `--extra-vars`. It derives
+`<IP>.nip.io` customer/admin hosts and explicit CORS origins (no wildcard, no
+hard-coded IP). An EC2 stop/start (IP change) needs only a re-run.
 
-### Persistence
-The compose file uses `restart: unless-stopped` and a named volume
-(`devshop-postgres-data`). Redeploys/reboots never destroy PostgreSQL data; the
-playbook never runs `docker compose down -v`.
+### GitOps
+Argo CD (namespace `argocd`) watches the DevShop repo
+(`kubernetes/overlays/aws`, branch `main`) with auto-sync
+(`prune`+`selfHeal`, PruneLast). The Secret is applied **outside** Argo CD so it
+is never pruned. After bootstrap, application changes flow GitHub → Argo CD →
+Kubernetes.
 
 ---
 
 ## Configuration references
 
-- `ansible/inventory/group_vars/all/main.yml` — repo URL/branch, deployment dir
-  (default `/opt/devshop`), SSH user/key, timezone, common packages.
-- `ansible/roles/devshop/defaults/main.yml` — `server_public_ip` (empty =
-  auto-detect), IP-detection endpoints.
-- `ansible/roles/devshop/vars/main.yml` — health-check poll settings.
+- `ansible/inventory/group_vars/all/main.yml` — repo URL/branch, SSH user/key,
+  timezone, db name/user.
+- `ansible/roles/kubernetes/defaults/main.yml` — namespaces, IP-detection
+  endpoints, ingress suffix (nip.io), k8s version, CNI pod CIDR, Argo CD
+  version, health poll settings.
+- `ansible/roles/kubernetes/templates/secret.yaml.j2` — the in-cluster Secret.
 
 ---
 
 ## Security considerations
 
-- SSH key is never committed; supplied via inventory var or `--private-key`.
-- No AWS keys, DB password, JWT secret, or admin password in any file — only in
-  the encrypted vault.
-- `.env` on the server is written with `no_log: true` and `chmod 600`.
-- The Terraform security group remains the authoritative network boundary; Ansible
-  does not enable UFW blindly (could lock out SSH) and does not open ports.
-- Host-key checking is disabled for this learning environment (see tradeoff in
-  `ansible.cfg`); production should pin host keys.
+- SSH key never committed; supplied via `--private-key` or inventory var.
+- Secrets generated/persisted with `no_log` + `chmod 600`; never written to
+  Git (`.devshop/` is git-ignored), never printed, never on the command line.
+- The Terraform security group is the network boundary; Ansible does not enable
+  UFW blindly (could lock out SSH).
+- Host-key checking is disabled for this learning environment (see `ansible.cfg`).
 
 ## Cost considerations
 
 Reuses the single `t3.small` (configurable) Free Tier–conscious stack from Phase
-4. No additional AWS resources are introduced by Ansible.
+4 — a single-node kubeadm cluster runs on the same instance; no extra EC2/RDS/LB.
 
 ## Known limitations
 
 - **Real deploy/reboot/idempotency tests must be run against an EC2 with your
-  credentials** (this project has no SSH access to AWS); the playbooks are
-  validated statically and are designed to be idempotent.
+  credentials** (this project has no SSH access to AWS; validated statically).
 - The EC2 public IPv4 can change on stop/start (no Elastic IP); re-run
-  `./scripts/deploy.sh --deploy-only` after such a change and only the runtime
-  `.env`/CORS need updating.
+  `./deploy.sh` after such a change and only the runtime `.env`/CORS/ingress hosts
+  need updating.

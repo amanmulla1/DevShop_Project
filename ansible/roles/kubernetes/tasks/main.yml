@@ -1,0 +1,252 @@
+# =============================================================================
+# DevShop — role: kubernetes
+#
+# Bootstraps a fresh EC2 host into STANDARD Kubernetes and installs Argo CD,
+# then applies the DevShop Secret/ConfigMap (outside Argo CD) and waits for the
+# DevShop application to become Synced + Healthy.
+#
+# Responsibility separation (per Phase 7):
+#   Terraform  = AWS infrastructure (not here)
+#   Ansible    = EC2 / server / Kubernetes / Argo CD bootstrap (this role)
+#   Argo CD    = GitOps / continuous delivery (installed here, governs app)
+#   Jenkins    = CI (unchanged)
+#   Docker     = application images (unchanged)
+#   PostgreSQL = database (inside Kubernetes)
+# =============================================================================
+
+- name: Fail fast if required secrets are not supplied
+  ansible.builtin.fail:
+    msg: >
+      Required secret '{{ item }}' is missing. deploy.sh generates these
+      automatically and passes them with --extra-vars @.devshop/secrets.yml.
+      Do not put real secrets in Git.
+  when: item is undefined or item == ''
+  loop:
+    - "{{ db_password | default('') }}"
+    - "{{ jwt_secret | default('') }}"
+    - "{{ admin_password | default('') }}"
+  no_log: true
+
+# --- Detect / pin the server public IP ---------------------------------------
+- name: Detect server public IP (auto)
+  ansible.builtin.shell: "curl -fsS --max-time 10 {{ ip_detect_urls[0] }}"
+  register: ip_detected
+  changed_when: false
+  when: server_public_ip | default('') | length == 0
+
+- name: Set effective public IP fact
+  ansible.builtin.set_fact:
+    devshop_public_ip: >-
+      {{ server_public_ip if (server_public_ip | default('') | length > 0)
+                           else ip_detected.stdout }}
+
+- name: Derive external ingress hostnames
+  ansible.builtin.set_fact:
+    devshop_customer_host: "{{ devshop_public_ip }}.{{ ingress_host_suffix }}"
+    devshop_admin_host: "admin.{{ devshop_public_ip }}.{{ ingress_host_suffix }}"
+
+# --- Clone/update the repository on the host ---------------------------------
+# The Phase 6 K8s installers live in the repo (kubernetes/scripts/*). We clone
+# the repo so those scripts + manifests (argocd application.yaml, overlays) are
+# available on the host for the GitOps bootstrap.
+- name: Create deployment directory
+  ansible.builtin.file:
+    path: "{{ devshop_dir }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Clone or update DevShop repository (for Kubernetes manifests/scripts)
+  ansible.builtin.git:
+    repo: "{{ devshop_repo }}"
+    dest: "{{ devshop_dir }}"
+    version: "{{ devshop_branch }}"
+    force: false
+    accept_hostkey: true
+
+# --- STANDARD Kubernetes installation (containerd/kubeadm/kubelet/kubectl/CNI)
+# ansible.builtin.script copies the local, tested Phase 6 script to the host and
+# runs it. Each script is idempotent / safely re-runnable.
+- name: Install standard Kubernetes (containerd, kubeadm, kubelet, kubectl, Calico, Metrics)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-kubernetes.sh"
+  environment:
+    K8S_VERSION: "{{ k8s_version }}"
+    CNI_POD_CIDR: "{{ cni_pod_cidr }}"
+  register: k8s_install
+  changed_when: "'Control plane already initialized' not in k8s_install.stdout"
+
+- name: Install local-path StorageClass (PostgreSQL persistence)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-storage.sh"
+
+- name: Install NGINX Ingress Controller (NodePort)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-ingress.sh"
+
+- name: Install Argo CD and register the DevShop Application
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-argocd.sh"
+  environment:
+    ARGO_VERSION: "{{ argocd_version }}"
+
+# --- Persist secrets on the host (reuse across reruns, never printed) --------
+- name: Create host secret state directory
+  ansible.builtin.file:
+    path: "{{ devshop_state_dir }}"
+    state: directory
+    mode: "0700"
+    owner: root
+    group: root
+
+- name: Persist DB password secret (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ db_password }}"
+    dest: "{{ devshop_state_dir }}/db_password"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Persist JWT secret (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ jwt_secret }}"
+    dest: "{{ devshop_state_dir }}/jwt_secret"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Persist admin password (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ admin_password }}"
+    dest: "{{ devshop_state_dir }}/admin_password"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+# --- Apply the DevShop Secret OUTSIDE Argo CD (not Git-managed) --------------
+# Phase 6 design: devshop-secret is intentionally NOT in the Kustomize/Argo CD
+# path, so Argo CD neither manages nor prunes it. Ansible renders it from the
+# supplied secrets and applies it directly, satisfying "no manual .env" and
+# "secrets never in Git".
+- name: Render devshop-secret manifest
+  ansible.builtin.template:
+    src: secret.yaml.j2
+    dest: "{{ devshop_dir }}/kubernetes/overlays/aws/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Apply devshop-secret (outside Argo CD)
+  ansible.builtin.command:
+    cmd: kubectl apply -f "{{ devshop_dir }}/kubernetes/overlays/aws/secret.yaml"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  changed_when: true
+
+# --- Align the DevShop ConfigMap / Ingress to the detected public IP ---------
+# The Git ConfigMap uses fixed (non-IP) CORS origins and the Ingress uses
+# placeholder hosts. The public IP is ephemeral (no Elastic IP), so we patch the
+# RUNTIME Ingress host rules to the detected IP-derived hostnames (nip.io) so
+# the app is reachable at http://<SERVER_IP> without hard-coding an IP in Git.
+# NOTE/tradeoff: the ConfigMap is Argo CD-managed; if selfHeal reverts a runtime
+# CORS patch it is re-applied on the next deploy (see kubernetes/README.md).
+- name: Patch NGINX Ingress host rules to the detected public IP
+  ansible.builtin.shell: |
+    set -e
+    kubectl patch ingress devshop -n {{ k8s_devshop_namespace }} --type='json' -p="[
+      {\"op\":\"replace\",\"path\":\"/spec/rules/0/host\",\"value\":\"{{ devshop_customer_host }}\"},
+      {\"op\":\"replace\",\"path\":\"/spec/rules/1/host\",\"value\":\"{{ devshop_admin_host }}\"}
+    ]" || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+# --- Wait for the DevShop application to sync + become healthy ---------------
+- name: Wait for Argo CD Application to reach Synced + Healthy
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 60); do
+      STATE=$(kubectl -n {{ k8s_argocd_namespace }} get application devshop \
+              -o jsonpath='{.status.sync.status} {.status.health.status}' 2>/dev/null || true)
+      case "$STATE" in
+        *"Synced"*"Healthy"*) echo "Argo CD: $STATE"; exit 0 ;;
+      esac
+      sleep 10
+    done
+    echo "ERROR: Argo CD application not Synced+Healthy after timeout"
+    kubectl -n {{ k8s_argocd_namespace }} get application devshop -o yaml 2>/dev/null || true
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+# --- Verify Kubernetes + application health ----------------------------------
+- name: Verify Kubernetes node is ready
+  ansible.builtin.command:
+    cmd: kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: k8s_node
+  until: "'True' in k8s_node.stdout"
+  retries: 30
+  delay: 10
+
+- name: Verify DB, backend and frontend pods are running
+  ansible.builtin.command:
+    cmd: kubectl get pods -n {{ k8s_devshop_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: app_pods
+  until: app_pods.stdout | regex_findall('Running') | length >= 4
+  retries: 40
+  delay: 10
+
+- name: Assert all DevShop pods report Running
+  ansible.builtin.assert:
+    that:
+      - "'Running' in app_pods.stdout"
+    success_msg: "All DevShop Kubernetes pods are Running."
+
+- name: Wait for backend actuator health through the backend Service
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 {{ backend_health_retries }}); do
+      CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+        --max-time 5 http://127.0.0.1:8080/actuator/health || true)
+      [ "$CODE" = "200" ] && echo "Backend health: 200" && exit 0
+      sleep {{ backend_health_delay }}
+    done
+    echo "Backend health check failed."
+    exit 1
+  register: backend_health
+  changed_when: false
+
+- name: Verify customer frontend is reachable
+  ansible.builtin.shell: |
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:5173/ || true
+  register: customer_fe
+  changed_when: false
+  failed_when: customer_fe.stdout != "200"
+
+- name: Verify admin frontend is reachable
+  ansible.builtin.shell: |
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:5174/ || true
+  register: admin_fe
+  changed_when: false
+  failed_when: admin_fe.stdout != "200"
+
+# --- Report final URLs ---------------------------------------------------------
+- name: Report deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "DevShop deployed successfully:"
+      - "  Customer:  http://{{ devshop_customer_host }}"
+      - "  Admin:     http://{{ devshop_admin_host }}"
+      - "  Backend:   http://{{ devshop_customer_host }}/api (via Nginx)"
+      - "  Server IP: {{ devshop_public_ip }}"

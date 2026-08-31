@@ -1,26 +1,31 @@
 # =============================================================================
-# DevShop — site.yml
+# DevShop — site.yml  (Phase 7: ONE-COMMAND bootstrap + GitOps deployment)
 #
-# Full provisioning + deployment playbook. Configures a fresh EC2 (created by
-# Terraform) and deploys the DevShop application with Docker Compose.
+# Run automatically by the root ./deploy.sh:
+#   1. Terraform provisions AWS infrastructure (VPC/subnet/IGW/SG/EC2).
+#   2. This playbook configures the EC2 host, installs STANDARD Kubernetes
+#      (containerd/kubeadm/kubelet/kubectl/Calico/Metrics), installs Argo CD,
+#      applies the DevShop Secret/ConfigMap, and waits for Argo CD to sync the
+#      DevShop application (GitHub -> Argo CD -> Kubernetes).
 #
 # Responsibilities are kept separate:
-#   - Terraform provisions the AWS infrastructure (VPC/subnet/IGW/SG/EC2).
-#   - Ansible configures the host and deploys the application.
+#   Terraform = AWS infrastructure;  Ansible = server + Kubernetes + Argo CD
+#   bootstrap;  Argo CD = GitOps/CD;  Jenkins = CI;  Docker = images.
 #
-# Secrets come from the encrypted inventory/group_vars/all/vault.yml, which
-# Ansible decrypts automatically (run with a vault password):
-#   ansible-playbook -i inventory/hosts.ini --ask-vault-pass playbooks/site.yml
+# Secrets are supplied by deploy.sh via --extra-vars @.devshop/secrets.yml and
+# are NEVER committed to Git or printed. (The old docker/devshop compose roles
+# are preserved in this repo but are no longer the normal deploy path — Argo CD
+# is.)
 #
 # Usage (from ansible/):
 #   ./scripts/deploy.sh
+# or via the root one-command:   ./deploy.sh
 # =============================================================================
-- name: Provision and deploy DevShop
+- name: Bootstrap EC2 into standard Kubernetes + Argo CD and deploy DevShop (GitOps)
   hosts: devshop
   become: true
   gather_facts: true
 
   roles:
     - common
-    - docker
-    - devshop
+    - kubernetes

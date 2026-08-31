@@ -41,7 +41,12 @@ if [ -n "${DEVSHOP_SSH_KEY:-}" ]; then
   ARGS+=(--private-key "$DEVSHOP_SSH_KEY")
 fi
 
-if [ -n "${DEVSHOP_VAULT_FILE:-}" ]; then
+# Phase 7: prefer the auto-generated secrets store written by the root ./deploy.sh
+# (git-ignored, 0600). Falls back to a pre-encrypted vault if it is absent.
+SECRETS_FILE="$ANSIBLE_DIR/../.devshop/secrets.yml"
+if [ -s "$SECRETS_FILE" ]; then
+  ARGS+=(--extra-vars "@$SECRETS_FILE")
+elif [ -n "${DEVSHOP_VAULT_FILE:-}" ]; then
   ARGS+=(--vault-password-file "$DEVSHOP_VAULT_FILE")
 else
   ARGS+=(--ask-vault-pass)

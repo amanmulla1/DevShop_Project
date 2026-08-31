@@ -1,20 +1,19 @@
 # =============================================================================
-# DevShop — Ansible Vault secrets (EXAMPLE / TEMPLATE).
+# DevShop — Secrets EXAMPLE / TEMPLATE.
 #
-# This file documents the REQUIRED keys for the encrypted vault. It is safe to
-# commit because it contains placeholders only.
+# Phase 7 (recommended): the root ./deploy.sh generates these secrets ONCE into
+# the git-ignored control-node store `.devshop/secrets.yml` (mode 0600) and
+# passes them to Ansible with --extra-vars @<file>. They are REUSED on every
+# subsequent run (no rotation) and never committed or printed.
 #
-# To create the REAL encrypted vault (values only ever stored encrypted):
+# This file documents the REQUIRED keys so you know what is expected. If you
+# prefer a pre-encrypted vault instead of the generated store, create:
 #
 #   cd ansible
 #   ansible-vault create inventory/group_vars/all/vault.yml \
 #       --vault-id devshop@prompt
 #
 #   # paste the keys below with real values, save & exit
-#
-# To edit later:
-#
-#   ansible-vault edit inventory/group_vars/all/vault.yml --vault-id devshop@prompt
 #
 # The real file (inventory/group_vars/all/vault.yml) is git-ignored by
 # ansible/.gitignore so its encrypted content is not committed by accident.

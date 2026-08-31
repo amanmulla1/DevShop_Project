@@ -22,6 +22,8 @@ DevShop is composed of three independently deployable applications:
 ```
 devshop/
 ├── README.md
+├── deploy.sh               # Phase 7 — ONE-COMMAND deploy (Terraform→Ansible→K8s→Argo CD)
+├── destroy.sh              # Phase 7 — separate, confirm-gated teardown
 ├── docker-compose.yml
 ├── docker-compose.ci.yml   # Phase 5 — registry-image overlay for CI deployment
 ├── .env.example
@@ -34,7 +36,7 @@ devshop/
 ├── jenkins/               # Phase 5 — Jenkins setup docs
 ├── kubernetes/            # Phase 6 — standard Kubernetes manifests + Argo CD (GitOps)
 ├── terraform/             # Phase 4 — AWS infrastructure (Terraform)
-└── ansible/               # Phase 7 — EC2 config + app deployment (Ansible)
+└── ansible/               # Phase 7 — EC2/K8s/Argo CD bootstrap + deploy orchestration
 ```
 
 ## Quick start with Docker (recommended)
@@ -236,37 +238,91 @@ Argo CD) and no EC2 IP is hard-coded (configurable Ingress hosts).
 See [`kubernetes/README.md`](kubernetes/README.md) for install, verification,
 GitOps, self-heal/drift, rollback, and troubleshooting.
 
-## Phase 7 — Ansible (EC2 configuration & application deployment)
+## Phase 7 — ONE-COMMAND deployment (Terraform → Ansible → Kubernetes → Argo CD)
 
-**Purpose:** after Terraform creates a fresh EC2, Ansible configures the host
-and deploys DevShop with Docker Compose, with minimal manual intervention.
-
-See [`ansible/README.md`](ansible/README.md) for full usage.
-
-Workflow:
+**Final goal:** from the repository root, run **ONE command** and the entire
+environment is provisioned, configured, deployed, verified, and ready to use. No
+manual EC2 config, no manual `.env`, no manual Kubernetes/Argo CD install.
 
 ```bash
-# Terraform provisions infrastructure (Phase 4)
-cd terraform && terraform apply && terraform output -raw instance_public_ip
-
-# Ansible configures + deploys (Phase 5)
-cd ../ansible
-ansible-vault create inventory/group_vars/all/vault.yml   # encrypted secrets
-./scripts/deploy.sh                                        # generate inventory + run
-./scripts/deploy.sh --deploy-only                          # re-deploy after IP change
+./deploy.sh
 ```
 
-Ansible:
-- **common** — apt update, base packages, timezone
-- **docker** — idempotent Docker Engine + Compose v2 install (conflict-safe), enable on boot
-- **devshop** — clone/update `main`, **auto-detect the EC2 public IP**, render
-  `/opt/devshop/.env` from the **Ansible Vault**, `docker compose up -d --build`, health checks
+When it finishes successfully you get the application URLs. Rerunning the same
+command is safe and idempotent. Destroying is a **separate, confirm-gated**
+command: `./destroy.sh`.
 
-No IP is hard-coded: `SERVER_IP`/CORS are derived from the detected public IPv4
-each deploy, so an EC2 stop/start (IP change) needs only a re-run of
-`./scripts/deploy.sh --deploy-only` — never a source change. The compose stack
-uses `restart: unless-stopped` plus the named `devshop-postgres-data` volume, so
-PostgreSQL data survives redeploys and reboots.
+### One-command flow
+
+```
+./deploy.sh
+  1. prerequisite checks        (terraform, ansible, ssh key, aws creds)
+  2. generate secure secrets    (once; reused, never printed/committed)
+  3. Terraform init/validate/apply      → AWS infrastructure
+  4. collect Terraform outputs          → EC2 public/private IP
+  5. generate the Ansible inventory     (automatic — nothing copied by hand)
+  6. Ansible bootstrap the EC2 host
+  7. Ansible install STANDARD Kubernetes (containerd, kubeadm, kubelet, kubectl,
+                                        Calico CNI, Metrics Server)
+  8. Ansible install Argo CD (GitOps)
+  9. apply DevShop Secret/ConfigMap     (outside Argo CD)
+ 10. wait for Argo CD to sync the DevShop app (GitHub → Argo CD → Kubernetes)
+ 11. wait for health checks
+ 12. print final URLs and summary
+```
+
+### Once-only prerequisites (before the FIRST deploy)
+
+These are the only manual setup steps, done once:
+
+1. **AWS credentials** configured (e.g. `aws configure` or env vars).
+2. **Terraform variables**: copy `terraform/terraform.tfvars.example` →
+   `terraform/terraform.tfvars` and set `key_pair_name` and `admin_cidr`
+   (your public IP). Optionally an existing EC2 key pair.
+3. **SSH private key** for that key pair. Either set `DEVSHOP_SSH_KEY=~/.ssh/xxx.pem`
+   or place a `*.pem` in `~/.ssh` (the script auto-detects it).
+4. **GitHub / Docker Hub credentials** already exist for your CI (Phase 5);
+   the Argo CD repo is public so no repo credentials are needed.
+
+After that: **`./deploy.sh`** is all you run.
+
+> Runs from a Linux shell / WSL. Mac/Linux also work. No manual `.env` is needed —
+> secrets are generated and persisted by the automation.
+
+### How the pieces stay separate
+
+| Component     | Responsibility                                                  |
+|---------------|-----------------------------------------------------------------|
+| Terraform     | AWS infrastructure                                              |
+| Ansible       | EC2/server + standard Kubernetes + Argo CD bootstrap            |
+| Kubernetes    | application runtime/orchestration                               |
+| Argo CD       | GitOps / continuous delivery (GitHub → K8s)                     |
+| Jenkins       | CI (Phase 5, unchanged)                                        |
+| Docker        | application images                                              |
+| PostgreSQL    | database (persistent inside Kubernetes)                        |
+
+### Secrets & IP handling (automatic, safe)
+
+- `./deploy.sh` generates strong secrets **once** into a git-ignored
+  `.devshop/secrets.yml` (mode 0600) and **reuses** them on later runs (no
+  rotation). They are persisted on the EC2 host too and never printed or
+  committed.
+- **No hard-coded EC2 IP**: the script reads the IP from `terraform output`,
+  generates the Ansible inventory, and Ansible derives
+  `SERVER_IP` / CORS / ingress hostnames automatically. EC2 stop/start (IP
+  change) needs only a re-run of `./deploy.sh`.
+- **No wildcard CORS** — explicit origins derived from the detected IP.
+
+### Operator control
+
+- `./deploy.sh` **stops on the first critical failure** (Terraform, SSH, K8s,
+  CNI, Argo CD, or health). A partial deploy resumes by re-running the same
+  command (idempotent, non-destructive).
+- `./destroy.sh` tears down the AWS infrastructure **only with explicit
+  confirmation**; it never runs as part of deploy.
+
+See [`ansible/README.md`](ansible/README.md) and
+[`kubernetes/README.md`](kubernetes/README.md) for details.
 
 ## Running locally without Docker
 

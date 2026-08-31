@@ -1,9 +1,13 @@
 # =============================================================================
 # DevShop — group_vars/all: non-secret configuration.
 #
-# Sensitive values (DB_PASSWORD, JWT_SECRET, ADMIN_PASSWORD, etc.) live in
-# inventory/group_vars/all/vault.yml, which is created with `ansible-vault
-# create` and holds ONLY encrypted content. See vault.yml.example and README.
+# Sensitive values (DB_PASSWORD, JWT_SECRET, ADMIN_PASSWORD, ...) are not stored
+# here. For Phase 7 they are generated ONCE by the root ./deploy.sh into a
+# git-ignored, 0600 control-node store (.devshop/secrets.yml) and passed to
+# Ansible via --extra-vars @<file>. None of them live in Git or are printed.
+#
+# A pre-encrypted vault (inventory/group_vars/all/vault.yml created with
+# ansible-vault) is still supported as an alternative — see vault.yml.example.
 # =============================================================================
 
 # --- Connection ------------------------------------------------------------
@@ -24,6 +28,10 @@ project_name: devshop
 devshop_repo: "https://github.com/amanmulla1/DevShop_Project.git"
 devshop_branch: main
 devshop_dir: /opt/devshop
+
+# --- Database (non-secret identifiers; the password is a generated secret) ----
+db_name: devshop
+db_username: devshop
 
 # User added to the docker group (Ubuntu default user on the EC2).
 sysadmin_user: "{{ ansible_user }}"
