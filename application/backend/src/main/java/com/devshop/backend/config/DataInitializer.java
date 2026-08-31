@@ -210,12 +210,20 @@ public class DataInitializer {
                                 org.springframework.security.crypto.password.PasswordEncoder passwordEncoder) {
         return args -> {
             String normalizedEmail = appAdminEmail.trim().toLowerCase();
-            if (repository.findByEmail(normalizedEmail).isEmpty()) {
-                Admin admin = new Admin(normalizedEmail, appAdminName, passwordEncoder.encode(appAdminPassword));
-                repository.save(admin);
+            Admin admin = repository.findByEmail(normalizedEmail).orElse(null);
+            if (admin == null) {
+                Admin created = new Admin(normalizedEmail, appAdminName, passwordEncoder.encode(appAdminPassword));
+                repository.save(created);
                 log.info("Bootstrap admin seeded: {}", normalizedEmail);
+            } else if (!passwordEncoder.matches(appAdminPassword, admin.getPasswordHash())) {
+                // Env-driven provisioning: keep the configured ADMIN_PASSWORD
+                // authoritative for the bootstrap admin so a password change in
+                // .env applies to an already-seeded row.
+                admin.setPasswordHash(passwordEncoder.encode(appAdminPassword));
+                repository.save(admin);
+                log.info("Bootstrap admin password synced to environment: {}", normalizedEmail);
             } else {
-                log.info("Bootstrap admin already present: {}", normalizedEmail);
+                log.info("Bootstrap admin already present with matching password: {}", normalizedEmail);
             }
         };
     }

@@ -1,14 +1,18 @@
 package com.devshop.backend.config;
 
+import com.devshop.backend.model.Admin;
 import com.devshop.backend.repository.AdminRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Verifies the bootstrap admin seed is duplicate-safe: invoking the seeder a
@@ -27,6 +31,12 @@ class AdminSeedTest {
     @Qualifier("seedAdmin")
     private CommandLineRunner seedAdmin;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Value("${app.admin.password}")
+    private String configuredPassword;
+
     @Test
     void adminSeedIsDuplicateSafe() throws Exception {
         // DataInitializer runs on startup, so exactly one admin should exist.
@@ -38,5 +48,23 @@ class AdminSeedTest {
 
         assertEquals(1, adminRepository.count(),
                 "Re-running the seed must not create a duplicate admin");
+    }
+
+    @Test
+    void staleAdminPasswordIsSyncedToEnvironmentWithoutDuplicate() throws Exception {
+        // Simulate a pre-existing admin row holding a stale (non-authoritative)
+        // password hash, e.g. from an earlier deployment.
+        Admin admin = adminRepository.findByEmail("seedadmin@test.com").orElseThrow();
+        admin.setPasswordHash(passwordEncoder.encode("SomeOldPassword123!"));
+        adminRepository.save(admin);
+
+        seedAdmin.run();
+
+        assertEquals(1, adminRepository.count(),
+                "Re-syncing the admin password must not create a duplicate admin");
+
+        Admin refreshed = adminRepository.findByEmail("seedadmin@test.com").orElseThrow();
+        assertTrue(passwordEncoder.matches(configuredPassword, refreshed.getPasswordHash()),
+                "Existing admin password should be re-hashed to match the configured ADMIN_PASSWORD");
     }
 }
