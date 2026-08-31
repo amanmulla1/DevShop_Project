@@ -50,7 +50,7 @@ spec:
                 name: devshop-secret
           resources:
             requests:
-              cpu: 250m
+              cpu: 175m
               memory: 512Mi
             limits:
               cpu: 1000m
