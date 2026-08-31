@@ -23,13 +23,17 @@ DevShop is composed of three independently deployable applications:
 devshop/
 ├── README.md
 ├── docker-compose.yml
+├── docker-compose.ci.yml   # Phase 5 — registry-image overlay for CI deployment
 ├── .env.example
+├── Jenkinsfile             # Phase 5 — CI/CD pipeline (Jenkins)
 ├── application/
 │   ├── backend/          # Spring Boot REST API
 │   ├── frontend/         # Customer storefront
 │   └── admin-frontend/   # Admin dashboard
-├── terraform/            # Phase 4 — AWS infrastructure (Terraform)
-└── ansible/              # Phase 5 — EC2 config + app deployment (Ansible)
+├── scripts/               # Phase 5 — CI deploy / health check / rollback helpers
+├── jenkins/               # Phase 5 — Jenkins setup docs
+├── terraform/             # Phase 4 — AWS infrastructure (Terraform)
+└── ansible/               # Phase 7 — EC2 config + app deployment (Ansible)
 ```
 
 ## Quick start with Docker (recommended)
@@ -166,7 +170,37 @@ config needs updating — never the application.
 > destroy the existing manually-deployed server. See `terraform/README.md`
 > ("About the existing manually-deployed server") for import guidance.
 
-## Phase 5 — Ansible (EC2 configuration & application deployment)
+## Phase 5 — Jenkins (CI/CD pipeline)
+
+**Purpose:** a real Jenkins Declarative Pipeline that, on a push to `main`,
+checks out the repo, runs all tests, builds the applications, builds the Docker
+images, pushes them to Docker Hub, deploys to the Terraform-created EC2 via
+Docker Compose, and runs health checks.
+
+```
+Developer -> git push -> GitHub -> Jenkins -> checkout -> tests -> build
+  -> Docker images -> Docker Hub -> deploy to AWS EC2 (Docker Compose)
+  -> health checks -> deployment successful
+```
+
+Key files:
+
+- `Jenkinsfile` — the Declarative Pipeline (test → build → Docker → push → deploy → health).
+- `scripts/ci-deploy.sh` — reproduce the deploy on the EC2 host (pull images, `compose up -d`).
+- `scripts/ci-health-check.sh` — verify backend/products/frontends after deploy.
+- `scripts/ci-rollback.sh` — roll back to a previous immutable image tag.
+- `docker-compose.ci.yml` — registry-image overlay used by CI (local dev is unchanged).
+- `jenkins/README.md` — full Jenkins setup, credentials, webhook, and troubleshooting.
+
+Traceability: each build is tagged with the Jenkins `BUILD_NUMBER` (e.g.
+`amanmulla1/devshop-backend:42`) and reported with the Git commit. Deployment
+always uses the exact immutable tag just built. Rolls back to any prior tag
+without touching the PostgreSQL volume.
+
+See [`jenkins/README.md`](jenkins/README.md) for setup, credentials, webhook
+configuration, description of the flow, and rollback details.
+
+## Phase 7 — Ansible (EC2 configuration & application deployment)
 
 **Purpose:** after Terraform creates a fresh EC2, Ansible configures the host
 and deploys DevShop with Docker Compose, with minimal manual intervention.
