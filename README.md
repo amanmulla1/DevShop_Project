@@ -31,7 +31,10 @@ devshop/
 │   ├── frontend/         # Customer storefront
 │   └── admin-frontend/   # Admin dashboard
 ├── scripts/               # Phase 5 — CI deploy / health check / rollback helpers
+│                          # Phase 6 — K3s install + Kubernetes deploy helpers
 ├── jenkins/               # Phase 5 — Jenkins setup docs
+├── kubernetes/            # Phase 6 — K3s manifests (namespace, config, secret,
+│                          #            postgres, backend, frontends, ingress, HPA)
 ├── terraform/             # Phase 4 — AWS infrastructure (Terraform)
 └── ansible/               # Phase 7 — EC2 config + app deployment (Ansible)
 ```
@@ -199,6 +202,50 @@ without touching the PostgreSQL volume.
 
 See [`jenkins/README.md`](jenkins/README.md) for setup, credentials, webhook
 configuration, description of the flow, and rollback details.
+
+## Phase 6 — Kubernetes (K3s orchestration)
+
+**Purpose:** run DevShop on a lightweight Kubernetes distribution, K3s, on the
+Free-Tier-compatible EC2. K3s bundles its own Ingress controller (Traefik) and
+storage class (`local-path`), so no EKS / NAT Gateway / RDS / managed load
+balancer is introduced (all paid/managed services are out of scope).
+
+Ownership model: **Terraform (Phase 4) owns the EC2 instance**, **Jenkins
+(Phase 5) produces immutable Docker images**, and **Kubernetes (Phase 6) owns
+application orchestration** on that instance.
+
+```
+K8s (single-node K3s on the EC2)
+├── devshop namespace
+│   ├── postgres (Stateful data via PersistentVolumeClaim / local-path)
+│   ├── backend        (Spring Boot, amanmulla1/devshop-backend:<tag>)
+│   ├── customer-frontend (Nginx, amanmulla1/devshop-frontend:<tag>)
+│   ├── admin-frontend    (Nginx, amanmulla1/devshop-admin-frontend:<tag>)
+│   ├── ConfigMap / Secret (env: DB, CORS, JWT, admin bootstrap)
+│   └── Ingress (Traefik): devshop.local -> customer, devshop-admin.local -> admin
+└── HPA (backend, optional - requires Metrics Server)
+```
+
+Key files:
+
+- `scripts/install-k3s.sh` — idempotent K3s server install + kubeconfig + node check.
+- `scripts/deploy-kubernetes.sh` — validate/dry-run, ensure Secret, `kubectl apply -k`,
+  set immutable image tags, wait for rollouts, print status.
+- `kubernetes/namespace.yaml`, `configmap.yaml`, `secret.example.yaml` — app config/secrets.
+- `kubernetes/postgres/` — `pvc.yaml`, `deployment.yaml`, `service.yaml` (persistent data).
+- `kubernetes/backend/`, `kubernetes/customer-frontend/`, `kubernetes/admin-frontend/` —
+  deployments + ClusterIP services.
+- `kubernetes/ingress.yaml`, `kubernetes/hpa.yaml`, `kubernetes/kustomization.yaml`.
+
+Image tags stay **configurable** (passed by the deploy script, default `latest`
+and overridable with `--tag <BUILD_NUMBER>`), so no single Jenkins build number
+is hard-coded in any manifest.
+
+Do **not** commit `kubernetes/secret.yaml` (git-ignored); create it from
+`secret.example.yaml` and fill in the real base64 values.
+
+See [`kubernetes/README.md`](kubernetes/README.md) for full install, deploy,
+rollback, and troubleshooting.
 
 ## Phase 7 — Ansible (EC2 configuration & application deployment)
 

@@ -1,0 +1,74 @@
+# =============================================================================
+# DevShop - Backend Deployment
+#
+# Runs the PREBUILT Spring Boot image produced by Jenkins/Docker Hub. Kubernetes
+# does NOT build the application - it pulls the image. The exact image
+# (registry + immutable BUILD_NUMBER tag) is injected via kustomization.yaml /
+# the deploy script, so no single build number is hard-coded here.
+#
+# Env: non-secret config from devshop-config ConfigMap; secrets (DB password,
+# JWT secret, admin password) from devshop-secret Secret.
+#
+# Service DNS: other pods reach this backend at:  backend:8080
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: devshop
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: devshop
+spec:
+  # Start with a single replica on the small EC2 instance; scale via HPA /
+  # kubectl scale later. Documented in kubernetes/README.md.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: amanmulla1/devshop-backend:LATEST_TAG_PLACEHOLDER
+          # image is overridden by kustomization.yaml images: / deploy script
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: devshop-config
+            - secretRef:
+                name: devshop-secret
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6

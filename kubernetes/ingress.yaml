@@ -1,0 +1,49 @@
+# =============================================================================
+# DevShop - Ingress (K3s / Traefik)
+#
+# K3s ships Traefik as its default Ingress controller, so NO external paid
+# load balancer is introduced. This Ingress routes by HOST:
+#
+#   devshop.local        -> customer-frontend (Service :80)
+#   devshop-admin.local  -> admin-frontend    (Service :80)
+#
+# About /api: each frontend's Nginx already reverse-proxies /api/* to the
+# backend Service (backend:8080) inside the cluster. Keeping /api at the
+# frontend preserves the existing relative-/api architecture and keeps requests
+# same-origin. Therefore no separate /api -> backend Ingress rule is needed
+# (and it would bypass the frontend proxies). See kubernetes/README.md.
+#
+# HOSTS ARE PLACEHOLDERS (no hard-coded EC2 IP). For public access:
+#   - map a real domain (or /etc/hosts entries) to the node IP, OR
+#   - use a temporary header-based rule for direct IP testing (documented).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devshop-ingress
+  namespace: devshop
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: devshop.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: customer-frontend
+                port:
+                  number: 80
+    - host: devshop-admin.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-frontend
+                port:
+                  number: 80

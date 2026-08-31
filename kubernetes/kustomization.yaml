@@ -1,0 +1,43 @@
+# =============================================================================
+# DevShop - Kustomize base
+#
+# Aggregates all DevShop Kubernetes resources and makes the application images
+# configurable so no single Jenkins BUILD_NUMBER is hard-coded in any manifest.
+#
+# To set the registry + immutable tag for a deployment (see deploy script):
+#   kubectl kustomize kubernetes | ... or apply the overlay/patched image with:
+#   kubectl edit set image ... (see scripts/deploy-kubernetes.sh)
+#
+# The image NAMES below are placeholders; the exact registry/tag are supplied at
+# deploy time (e.g. amanmulla1/devshop-backend:42).
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml            # NOTE: create from secret.example.yaml first
+  - postgres/pvc.yaml
+  - postgres/deployment.yaml
+  - postgres/service.yaml
+  - backend/deployment.yaml
+  - backend/service.yaml
+  - customer-frontend/deployment.yaml
+  - customer-frontend/service.yaml
+  - admin-frontend/deployment.yaml
+  - admin-frontend/service.yaml
+  - ingress.yaml
+  - hpa.yaml
+
+# Image registry + tag are injected per-deployment here (overridden at apply
+# time by scripts/deploy-kubernetes.sh using `kubectl set image` or a YAML
+# patch). Add one entry per application image with the desired tag, e.g.:
+#   images:
+#     - name: amanmulla1/devshop-backend
+#       newTag: 42
+#     - name: amanmulla1/devshop-frontend
+#       newTag: 42
+#     - name: amanmulla1/devshop-admin-frontend
+#       newTag: 42
+images: []
