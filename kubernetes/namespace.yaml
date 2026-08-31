@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: devshop
-  labels:
-    name: devshop
-    app.kubernetes.io/part-of: devshop
