@@ -59,6 +59,7 @@ public class SecurityConfig {
                             Map.of("error", "Unauthorized", "message", "Authentication required"));
                 }))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // CORS preflight
                         .requestMatchers("/api/auth/register", "/api/auth/login",
                                 "/api/auth/admin/login", "/api/auth/logout").permitAll()
                         .requestMatchers("/api/products", "/api/products/**").permitAll()
