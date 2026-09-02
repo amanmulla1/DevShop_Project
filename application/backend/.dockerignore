@@ -1,0 +1,13 @@
+.git
+.gitignore
+target
+node_modules
+*.log
+backend-run.log
+spring-boot.log
+spring-error.log
+README.md
+.idea
+*.iml
+.vscode
+.DS_Store
