@@ -1,7 +1,0 @@
-# =============================================================================
-# DevShop — role: devshop — vars (role-internal, higher precedence than defaults)
-# =============================================================================
-
-# Health-check poll window for a fresh --build first deploy.
-backend_health_retries: 40
-backend_health_delay: 5
