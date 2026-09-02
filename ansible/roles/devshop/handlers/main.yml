@@ -1,0 +1,10 @@
+# =============================================================================
+# DevShop — role: devshop — handlers
+# Triggered only when the repository or .env changes, so a no-op re-run of the
+# playbook (idempotency) does not restart the application unnecessarily.
+# =============================================================================
+
+- name: Redeploy DevShop containers
+  ansible.builtin.command: docker compose up -d --build
+  args:
+    chdir: "{{ devshop_dir }}"

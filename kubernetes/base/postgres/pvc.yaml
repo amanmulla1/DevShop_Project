@@ -1,0 +1,29 @@
+# =============================================================================
+# DevShop - PostgreSQL PersistentVolumeClaim
+#
+# Uses the storage class provided by the storage provisioner installed by
+# scripts/install-storage.sh on the standard Kubernetes cluster. The default is
+# `local-path` (from the open-source, independently-installed
+# local-path-provisioner, which is NOT K3s). For other clusters, change
+# storageClassName to your cluster's default - VERIFY with:
+#   kubectl get storageclass
+# The AWS overlay may override this via Kustomize if a different class is used.
+#
+# The PVC keeps PostgreSQL data on persistent storage, so the database survives
+# pod deletion/recreation and redeploys. NEVER delete this PVC to wipe data.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: devshop
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: devshop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

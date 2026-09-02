@@ -1,0 +1,18 @@
+# =============================================================================
+# DevShop — Ansible inventory (EXAMPLE).
+#
+# This file documents the expected inventory format. Do NOT edit it directly
+# with a real IP; instead run scripts/generate_inventory.sh which writes
+# inventory/hosts.ini from Terraform outputs.
+#
+#   cp inventory/hosts.ini.example host.ini   # not normally needed
+#
+# Note: the EC2 instance has NO Elastic IP, so its public IPv4 can change on
+# stop/start. Regenerate this inventory (or re-run scripts/deploy.sh) whenever
+# the address changes.
+# =============================================================================
+
+[devshop]
+# Replace CHANGE_ME with the EC2 public IPv4, or run:
+#   terraform output -raw instance_public_ip
+CHANGE_ME ansible_host=CHANGE_ME

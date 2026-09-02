@@ -1,0 +1,50 @@
+# =============================================================================
+# DevShop - postgres-exporter custom queries
+#
+# A few application-relevant queries beyond the exporter defaults. The exporter
+# also ships a comprehensive default metric set (pg_stat_database_*, 
+# pg_settings_*, pg_stat_activity_*, etc.) that we keep enabled
+# (PG_EXPORTER_DISABLE_DEFAULT_METRICS=false).
+#
+# Namespaces/labels are bounded - no high-cardinality labels (no user/db ids in
+# label sets except the fixed database name it connects to).
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-exporter-queries
+  namespace: monitoring
+  labels:
+    app: postgres-exporter
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+data:
+  queries.yaml: |
+    pg_database_size_bytes:
+      query: "SELECT pg_database_size(current_database()) AS bytes"
+      metrics:
+        - bytes:
+            usage: "GAUGE"
+            description: "Size in bytes of the current database"
+
+    pg_cache_hit_ratio:
+      query: >
+        SELECT
+          CASE WHEN (blks_hit + blks_read) = 0 THEN 0
+               ELSE (blks_hit::float / (blks_hit + blks_read)::float) * 100 END AS ratio
+        FROM pg_stat_database
+        WHERE datname = current_database()
+      metrics:
+        - ratio:
+            usage: "GAUGE"
+            description: "Buffer cache hit ratio (percent) for the current database"
+
+    pg_deadlocks_total:
+      query: >
+        SELECT COALESCE(deadlocks, 0) AS deadlocks
+        FROM pg_stat_database
+        WHERE datname = current_database()
+      metrics:
+        - deadlocks:
+            usage: "GAUGE"
+            description: "Total observed deadlocks for the current database"
