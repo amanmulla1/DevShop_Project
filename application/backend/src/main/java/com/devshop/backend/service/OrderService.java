@@ -129,15 +129,11 @@ public class OrderService {
     }
 
     public List<Order> getOrdersByCustomerId(Long customerId) {
-        return orderRepository.findAll().stream()
-                .filter(order -> order.getCustomer() != null && order.getCustomer().getId().equals(customerId))
-                .toList();
+        return orderRepository.findByCustomerId(customerId);
     }
 
     public List<Order> getOrdersByCustomerUserid(String userid) {
-        return orderRepository.findAll().stream()
-                .filter(order -> order.getCustomer() != null && userid.equals(order.getCustomer().getUserid()))
-                .toList();
+        return orderRepository.findByCustomerUserid(userid);
     }
 
     public Order updateStatus(Long orderId, OrderStatus status) {

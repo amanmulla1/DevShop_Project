@@ -21,6 +21,7 @@ export default function DashboardPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     loadAll()
@@ -38,8 +39,10 @@ export default function DashboardPage() {
       setProducts(productData)
       setCustomers(customerData)
       setOrders(orderData)
-    } catch {
-      // Keep existing data on a transient failure.
+      setError('')
+    } catch (err) {
+      // Keep existing data on a transient failure, but surface the problem.
+      setError(err instanceof Error ? err.message : 'Unable to load dashboard data')
     } finally {
       setLoading(false)
     }
@@ -77,6 +80,7 @@ export default function DashboardPage() {
           <div className="admin-empty">Loading dashboard…</div>
         ) : (
           <>
+            {error && <div className="admin-form-card checkout-error">{error}</div>}
             <section className="admin-metrics">
               <div className="metric-card">
                 <span>Total Revenue</span>

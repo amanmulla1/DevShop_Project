@@ -3,9 +3,18 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import App from '../App'
 import * as productApi from '../api/productApi'
 import { Product } from '../types/Product'
+import { AuthProvider } from '../context/AuthContext'
 
 // Mock the API module so tests don't need a running backend
 vi.mock('../api/productApi')
+
+function renderApp() {
+  render(
+    <AuthProvider>
+      <App />
+    </AuthProvider>
+  )
+}
 
 const mockProducts: Product[] = [
   {
@@ -39,14 +48,14 @@ describe('Product listing', () => {
 
   it('shows loading state while fetching', () => {
     vi.mocked(productApi.fetchProducts).mockReturnValue(new Promise(() => {}))
-    render(<App />)
+    renderApp()
     expect(screen.getByRole('status')).toBeInTheDocument()
     expect(screen.getByText(/loading products/i)).toBeInTheDocument()
   })
 
   it('renders products after successful fetch', async () => {
     vi.mocked(productApi.fetchProducts).mockResolvedValue(mockProducts)
-    render(<App />)
+    renderApp()
 
     await waitFor(() => {
       expect(screen.getByText('Cloud Server T2')).toBeInTheDocument()
@@ -56,7 +65,7 @@ describe('Product listing', () => {
 
   it('shows error message when API fails', async () => {
     vi.mocked(productApi.fetchProducts).mockRejectedValue(new Error('Network error'))
-    render(<App />)
+    renderApp()
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
@@ -69,7 +78,7 @@ describe('Product listing', () => {
       .mockRejectedValueOnce(new Error('fail'))
       .mockResolvedValueOnce(mockProducts)
 
-    render(<App />)
+    renderApp()
 
     await waitFor(() => screen.getByRole('alert'))
     fireEvent.click(screen.getByText(/try again/i))
@@ -95,7 +104,7 @@ describe('Category filtering and navigation', () => {
       { id: 4, name: 'Monitoring Dashboard', description: 'Observability dashboard.', price: 89.99, stock: 40 },
     ])
 
-    render(<App />)
+    renderApp()
 
     await waitFor(() => screen.getByText('Cloud Server T2'))
 
@@ -115,7 +124,7 @@ describe('Category filtering and navigation', () => {
 
   it('renders an About section and exposes a working About link', async () => {
     vi.mocked(productApi.fetchProducts).mockResolvedValue(mockProducts)
-    render(<App />)
+    renderApp()
 
     await waitFor(() => screen.getByText('Cloud Server T2'))
 
@@ -134,7 +143,7 @@ describe('Category filtering and navigation', () => {
       value: scrollSpy,
     })
 
-    render(<App />)
+    renderApp()
 
     await waitFor(() => screen.getByText('Cloud Server T2'))
     fireEvent.click(screen.getByRole('button', { name: /view categories/i }))
@@ -151,7 +160,7 @@ describe('Shopping cart', () => {
   })
 
   async function renderAndWait() {
-    render(<App />)
+    renderApp()
     await waitFor(() => screen.getByText('Cloud Server T2'))
   }
 

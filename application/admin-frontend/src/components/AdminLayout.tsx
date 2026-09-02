@@ -20,7 +20,7 @@ export default function AdminLayout() {
   }
 
   function isActive(href: string) {
-    return window.location.pathname === href
+    return location.pathname === href
   }
 
   return (

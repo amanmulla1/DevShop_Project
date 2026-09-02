@@ -9,6 +9,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const storefrontUrl = import.meta.env.VITE_STOREFRONT_URL ?? '/'
 
   if (authenticated) {
     return <Navigate to="/" replace />
@@ -129,7 +130,7 @@ export default function LoginPage() {
           </form>
 
           <p className="admin-auth__alt">
-            <a href="http://localhost:5173" target="_blank" rel="noopener noreferrer">
+            <a href={storefrontUrl} target="_blank" rel="noopener noreferrer">
               ← Back to storefront
             </a>
           </p>

@@ -99,27 +99,28 @@ data:
         relabel_configs:
           - action: replace
             source_labels: [__meta_kubernetes_node_name]
-            target_label: __metrics_path__
-            replacement: /api/v1/nodes/${1}/proxy/metrics
+            target_label: __address__
+            replacement: ${1}:10250
           - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
           - action: replace
             source_labels: [__meta_kubernetes_node_name]
             target_label: node
 
-      # --- cAdvisor (container/pod resource metrics) via kubelet proxy ---------
+      # --- cAdvisor (container/pod resource metrics) via kubelet metrics port ---
       - job_name: kubernetes-cadvisor
         scheme: https
         tls_config:
           insecure_skip_verify: true
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        metrics_path: /metrics/cadvisor
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
           - action: replace
             source_labels: [__meta_kubernetes_node_name]
-            target_label: __metrics_path__
-            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+            target_label: __address__
+            replacement: ${1}:10250
           - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
           - action: replace
@@ -158,6 +159,10 @@ data:
           - action: replace
             source_labels: [__meta_kubernetes_node_name]
             target_label: node
+          - action: replace
+            source_labels: [__meta_kubernetes_node_name]
+            target_label: __address__
+            replacement: ${1}:9100
 
       # --- PostgreSQL exporter ---------------------------------------------------
       - job_name: postgres-exporter

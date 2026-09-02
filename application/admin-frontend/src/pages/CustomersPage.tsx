@@ -9,6 +9,7 @@ export default function CustomersPage() {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', city: '', state: '', postalCode: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     loadCustomers()
@@ -21,6 +22,8 @@ export default function CustomersPage() {
       setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load customers')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -138,7 +141,12 @@ export default function CustomersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredCustomers.map((customer) => (
+              {loading ? (
+                <tr><td colSpan={6} className="admin-empty">Loading customers…</td></tr>
+              ) : filteredCustomers.length === 0 ? (
+                <tr><td colSpan={6} className="admin-empty">No customers found.</td></tr>
+              ) : (
+                filteredCustomers.map((customer) => (
                 <tr key={customer.id ?? customer.userid}>
                   <td>{customer.userid ?? 'Pending'}</td>
                   <td>{customer.name}</td>
@@ -152,7 +160,8 @@ export default function CustomersPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
+              ))
+              )}
             </tbody>
           </table>
         </div>

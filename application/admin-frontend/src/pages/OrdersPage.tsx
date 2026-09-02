@@ -10,16 +10,25 @@ export default function OrdersPage() {
   const [status, setStatus] = useState('All')
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   async function loadOrders() {
-    const data = await fetchAdminOrders()
-    setOrders(data)
-    setSelectedOrder((current) => {
-      if (!current) return current
-      const fresh = data.find((o) => o.id === current.id)
-      return fresh ?? current
-    })
-    setLastUpdated(new Date())
+    try {
+      const data = await fetchAdminOrders()
+      setOrders(data)
+      setSelectedOrder((current) => {
+        if (!current) return current
+        const fresh = data.find((o) => o.id === current.id)
+        return fresh ?? current
+      })
+      setLastUpdated(new Date())
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load orders')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -39,9 +48,14 @@ export default function OrdersPage() {
   }), [orders, search, status])
 
   async function handleStatusChange(orderId: number, nextStatus: string) {
-    const updated = await updateAdminOrderStatus(orderId, nextStatus)
-    setOrders((current) => current.map((order) => order.id === orderId ? { ...order, status: updated.status } : order))
-    setSelectedOrder((current) => current && current.id === orderId ? { ...current, status: updated.status } : current)
+    if (orderId === 0) return
+    try {
+      const updated = await updateAdminOrderStatus(orderId, nextStatus)
+      setOrders((current) => current.map((order) => order.id === orderId ? { ...order, status: updated.status } : order))
+      setSelectedOrder((current) => current && current.id === orderId ? { ...current, status: updated.status } : current)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update order status')
+    }
   }
 
   return (
@@ -65,6 +79,8 @@ export default function OrdersPage() {
           </select>
         </div>
 
+        {error && <div className="admin-form-card checkout-error">{error}</div>}
+
         <div className="admin-table-panel panel">
           <table>
             <thead>
@@ -79,7 +95,12 @@ export default function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.map((order) => (
+              {loading ? (
+                <tr><td colSpan={7} className="admin-empty">Loading orders…</td></tr>
+              ) : filteredOrders.length === 0 ? (
+                <tr><td colSpan={7} className="admin-empty">No orders found.</td></tr>
+              ) : (
+                filteredOrders.map((order) => (
                 <tr key={order.id ?? order.orderNumber}>
                   <td><button className="link-button" onClick={() => setSelectedOrder(order)}>{order.orderNumber ?? `#${order.id}`}</button></td>
                   <td>{order.customer?.name ?? 'Guest'}</td>
@@ -97,7 +118,8 @@ export default function OrdersPage() {
                     </select>
                   </td>
                 </tr>
-              ))}
+              ))
+              )}
             </tbody>
           </table>
         </div>

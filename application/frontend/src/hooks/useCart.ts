@@ -1,33 +1,51 @@
 import { useState, useEffect } from 'react'
 import { Product } from '../types/Product'
+import { useAuth } from '../context/AuthContext'
 
 export interface CartItem {
   product: Product
   quantity: number
 }
 
-const CART_STORAGE_KEY = 'devshop_cart'
+const CART_STORAGE_PREFIX = 'devshop_cart:'
 
-function loadCart(): CartItem[] {
+function cartKeyFor(userid?: string): string {
+  // Isolate carts per authenticated user; anonymous shoppers share a guest cart.
+  return CART_STORAGE_PREFIX + (userid ? userid : 'guest')
+}
+
+function loadCart(key: string): CartItem[] {
   try {
-    const raw = localStorage.getItem(CART_STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as CartItem[]) : []
   } catch {
     return []
   }
 }
 
-function saveCart(items: CartItem[]): void {
-  localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items))
+function saveCart(key: string, items: CartItem[]): void {
+  localStorage.setItem(key, JSON.stringify(items))
 }
 
 export function useCart() {
-  const [items, setItems] = useState<CartItem[]>(loadCart)
+  const { user } = useAuth()
+  const [key, setKey] = useState<string>(() => cartKeyFor(user?.userid))
+  const [items, setItems] = useState<CartItem[]>(() => loadCart(cartKeyFor(user?.userid)))
+
+  // When the authenticated identity changes (login/logout), switch to that
+  // user's isolated cart instead of leaking the previous shopper's items.
+  useEffect(() => {
+    const nextKey = cartKeyFor(user?.userid)
+    if (nextKey !== key) {
+      setKey(nextKey)
+      setItems(loadCart(nextKey))
+    }
+  }, [user, key])
 
   // Persist to localStorage whenever the cart changes
   useEffect(() => {
-    saveCart(items)
-  }, [items])
+    saveCart(key, items)
+  }, [items, key])
 
   function addToCart(product: Product): void {
     setItems(prev => {

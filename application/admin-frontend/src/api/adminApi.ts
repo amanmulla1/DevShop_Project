@@ -12,7 +12,26 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return headers
 }
 
+/**
+ * An expired or revoked admin token returns 401. Clear the stale session and
+ * bounce to the admin login page instead of showing confusing per-page errors.
+ */
+function handleUnauthorized(): void {
+  try {
+    sessionStorage.removeItem('devshop.admin.token')
+    sessionStorage.removeItem('devshop.admin.user')
+  } catch {
+    // sessionStorage may be disabled; navigation resets state anyway.
+  }
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.assign('/login')
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
+  if (response.status === 401) {
+    handleUnauthorized()
+  }
   if (!response.ok) {
     const text = await response.text()
     let message = 'Request failed'

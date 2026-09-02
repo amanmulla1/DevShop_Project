@@ -16,7 +16,30 @@ export interface AuthResponse {
   email: string
 }
 
+const TOKEN_KEY = 'devshop.customer.token'
+const USER_KEY = 'devshop.customer.user'
+
+/**
+ * An expired or revoked token returns 401. Clear the stale session and bounce
+ * to the login page so the user can re-authenticate instead of seeing
+ * confusing per-page errors.
+ */
+function handleUnauthorized(): void {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY)
+    sessionStorage.removeItem(USER_KEY)
+  } catch {
+    // sessionStorage may be disabled; state is cleared on navigation anyway.
+  }
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.assign('/login')
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
+  if (response.status === 401) {
+    handleUnauthorized()
+  }
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     const message = data?.message || 'Request failed'

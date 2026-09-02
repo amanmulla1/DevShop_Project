@@ -86,7 +86,7 @@ export default function OrderConfirmationPage() {
               )}
               <div className="confirmation-field">
                 <span>Customer ID</span>
-                <strong>{order.customer?.userid ?? 'CUS-NEW'}</strong>
+                <strong>{order.customer?.userid ?? '—'}</strong>
               </div>
             </div>
           </section>
