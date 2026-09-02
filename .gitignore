@@ -1,0 +1,23 @@
+# Environment / secrets - DO NOT COMMIT
+.env
+.env.*
+!.env.example
+
+# Demo - locally generated secret state. NEVER commit.
+.demo-secret-state
+
+# Keys / certs
+*.pem
+*.key
+
+# Node / build
+node_modules/
+dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
