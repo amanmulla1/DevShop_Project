@@ -1,0 +1,28 @@
+# =============================================================================
+# DevShop - Kustomize base
+#
+# Aggregates all DevShop application resources. The exact image
+# (registry + immutable BUILD_NUMBER tag) and environment-specific settings are
+# supplied by the overlays (see kubernetes/overlays/aws), so no single build
+# number or EC2 IP is hard-coded here.
+#
+# The devshop-secret Secret is a NON-committed file that the AWS overlay adds
+# (created from secret.example.yaml locally). The base deliberately does NOT
+# list secret.yaml so that applying the base without an overlay cannot fail on a
+# missing real secret.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres/pvc.yaml
+  - postgres/deployment.yaml
+  - postgres/service.yaml
+  - backend/deployment.yaml
+  - backend/service.yaml
+  - customer-frontend/deployment.yaml
+  - customer-frontend/service.yaml
+  - admin-frontend/deployment.yaml
+  - admin-frontend/service.yaml

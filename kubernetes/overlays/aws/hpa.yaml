@@ -1,0 +1,35 @@
+# =============================================================================
+# DevShop - Backend HorizontalPodAutoscaler (OPTIONAL)
+#
+# HPA scaling only works AFTER the Metrics Server is installed and is reporting
+# metrics. scripts/install-kubernetes.sh / install-metrics.sh install it.
+# Verify before relying on it:
+#   kubectl top nodes
+#   kubectl top pods -n devshop
+# Do NOT claim HPA works unless `kubectl get hpa -n devshop` shows observed
+# metrics and the utilization column is populated.
+#
+# Start lightweight on the Free-Tier EC2: min 1, max 3, CPU 70%.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: devshop
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: devshop
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

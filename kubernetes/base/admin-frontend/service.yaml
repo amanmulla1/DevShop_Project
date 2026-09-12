@@ -1,0 +1,22 @@
+# =============================================================================
+# DevShop - Admin Frontend Service (internal ClusterIP)
+#
+# Exposed externally through the Ingress. /api is proxied through the pod's own
+# Nginx, so the Service only serves the admin site on port 80.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin-frontend
+  namespace: devshop
+  labels:
+    app: admin-frontend
+    app.kubernetes.io/part-of: devshop
+spec:
+  type: ClusterIP
+  selector:
+    app: admin-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

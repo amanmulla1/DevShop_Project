@@ -1,0 +1,16 @@
+# DevShop - placement of the application workloads.
+#
+# The application (frontends, backend, PostgreSQL) runs on the app worker node
+# (labelled app-node=yes by the Ansible bootstrap). Pinning it keeps memory use
+# predictable on the smallest t3.micro instances and, critically, keeps the
+# local-path PostgreSQL volume on the SAME node across restarts.
+#
+# The monitoring stack is placed by kubernetes/monitoring/nodeplacement.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+patchesStrategicMerge:
+  - backend/nodeplacement.yaml
+  - postgres/nodeplacement.yaml
+  - customer-frontend/nodeplacement.yaml
+  - admin-frontend/nodeplacement.yaml

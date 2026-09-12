@@ -1,0 +1,23 @@
+# =============================================================================
+# DevShop - Customer Frontend Service (internal ClusterIP)
+#
+# Exposed externally through the Ingress. The backend /api is reached through
+# this pod's own Nginx reverse proxy, so the frontend Service only needs to
+# serve the static site on port 80.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-frontend
+  namespace: devshop
+  labels:
+    app: customer-frontend
+    app.kubernetes.io/part-of: devshop
+spec:
+  type: ClusterIP
+  selector:
+    app: customer-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

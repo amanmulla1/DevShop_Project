@@ -1,0 +1,53 @@
+# =============================================================================
+# DevShop - Argo CD Application (GitOps source of truth)
+#
+# Argo CD applies this Application in the `argocd` namespace. It points at the
+# GitHub repository root (`kubernetes/overlays/aws` Kustomize base) and
+# synchronizes ONLY the `devshop` namespace resources. It runs on first boot of
+# Argo CD (scripts/install-argocd.sh applies this file).
+#
+# Source: public GitHub repo -> HTTPS. If the repo becomes PRIVATE, configure a
+# Repository credential in Argo CD (never commit credentials) - see README.
+#
+# Automated sync with prune + selfHeal:
+#   - selfHeal: flips any manual drift back to the Git-defined state.
+#   - prune:    removes resources Argo CD manages that disappear from Git.
+#
+# Prune safety: the devshop-secret is NOT managed by Argo CD (it is not in the
+# Kustomize output), so prune can NEVER delete it. PostgreSQL persistence lives
+# in the postgres-pvc (managed), which is only pruned if the PVC is removed from
+# Git - never on a normal rollout. Argo CD and Terraform infrastructure are in
+# different namespaces/scopes and are never touched by this Application.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devshop
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/amanmulla1/DevShop_Project.git
+    targetRevision: main
+    path: kubernetes/overlays/aws
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devshop
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      # Do not delete the Postgres PVC implicitly; prune only removes resources
+      # that are no longer defined in Git.
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

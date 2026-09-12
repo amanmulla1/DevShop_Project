@@ -1,0 +1,10 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin-frontend
+  namespace: devshop
+spec:
+  template:
+    spec:
+      nodeSelector:
+        app-node: "yes"
