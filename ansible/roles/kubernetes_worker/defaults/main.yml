@@ -1,0 +1,16 @@
+# =============================================================================
+# DevShop - role: kubernetes_worker
+#
+# Prepares a WORKER node (containerd + kubeadm tools) and joins it to the
+# cluster using the join command produced by the control-plane node.
+#
+# Runs on the workers inventory group. Standard upstream Kubernetes only.
+# =============================================================================
+
+devshop_dir: /opt/devshop
+
+k8s_script_dir: "{{ playbook_dir }}/../../kubernetes/scripts"
+k8s_version: "1.30"
+
+# Local path where the (decoded) join command is written on each worker.
+join_command_path: /etc/kubernetes/join/devshop-join-command.sh

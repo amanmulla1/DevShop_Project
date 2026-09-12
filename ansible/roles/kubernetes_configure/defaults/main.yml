@@ -1,0 +1,52 @@
+# =============================================================================
+# DevShop - role: kubernetes_configure
+#
+# Post-cluster configuration, all driven from the control-plane node:
+#   node labels (app / monitoring placement) -> local-path storage ->
+#   NGINX ingress -> Argo CD -> DevShop Secret (outside Argo CD) ->
+#   monitoring secrets -> wait for GitOps sync -> health checks.
+#
+# Secrets are supplied by the root ./deploy.sh via --extra-vars
+# @.devshop/secrets.yml and are never committed or printed.
+# =============================================================================
+
+# Repository + state locations on the host.
+devshop_dir: /opt/devshop
+devshop_state_dir: /etc/devshop/state
+
+# Namespaces.
+k8s_argocd_namespace: argocd
+k8s_devshop_namespace: devshop
+monitoring_namespace: monitoring
+
+# Public IP auto-detection (empty = detect at deploy time).
+server_public_ip: ""
+ip_detect_urls:
+  - https://api.ipify.org
+  - https://ifconfig.me/ip
+
+# External hostnames for the NGINX ingress (nip.io resolves *.ip.nip.io to IP).
+ingress_host_suffix: nip.io
+
+# Health-check retries / delays.
+backend_health_retries: 30
+backend_health_delay: 10
+
+# Install scripts live in this repo (transferred by the script module).
+k8s_script_dir: "{{ playbook_dir }}/../../kubernetes/scripts"
+argocd_version: "v2.12.4"
+
+# Node labels. Workers are labelled by node_role in the generated inventory:
+#   app-node=yes        -> application workloads (frontends, backend, PostgreSQL)
+#   monitoring-node=yes -> Prometheus / Grafana / Alertmanager / exporters
+# Kustomize overlays use these as nodeSelectors.
+app_node_label: app-node
+monitoring_node_label: monitoring-node
+label_value: "yes"
+
+# Monitoring secret values (rendered outside Argo CD, from --extra-vars).
+grafana_admin_user: admin
+grafana_admin_password: ""
+# postgres_exporter DSN is built from db_username + db_password.
+db_username: devshop
+db_password: ""

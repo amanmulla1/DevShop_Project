@@ -1,0 +1,26 @@
+- name: Create the join-command directory
+  ansible.builtin.file:
+    path: "{{ join_command_path | dirname }}"
+    state: directory
+    mode: "0700"
+
+# The control-plane role slurped the join command from the first control-plane
+# node. Decode it here so each worker gets a copy.
+- name: Copy the join command from the control-plane node
+  ansible.builtin.copy:
+    content: "{{ hostvars[groups['control_plane'][0]]['cp_join_cmd']['content'] | b64decode }}"
+    dest: "{{ join_command_path }}"
+    mode: "0600"
+  when: groups['control_plane'] | length > 0
+
+- name: Prepare and join the worker node
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/join-worker.sh {{ join_command_path }}"
+  environment:
+    K8S_VERSION: "{{ k8s_version }}"
+  register: join_out
+  changed_when: "'already part of a cluster' not in join_out.stdout"
+
+- name: Report worker registration (checked on the control-plane later)
+  ansible.builtin.debug:
+    msg: "Worker prepared: {{ inventory_hostname }} (node_role: {{ node_role | default('app') }}). It is visible in 'kubectl get nodes' once Ready."

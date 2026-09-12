@@ -1,0 +1,342 @@
+# =============================================================================
+# DevShop - cluster configuration, Argo CD GitOps and verification.
+#
+# Everything below runs ON the control-plane node (it owns the kubeconfig).
+# =============================================================================
+
+- name: Fail fast if required secrets are missing
+  ansible.builtin.fail:
+    msg: >
+      Required secret '{{ item }}' is missing. The root ./deploy.sh generates
+      these into .devshop/secrets.yml and passes them with --extra-vars. Never
+      put real secrets in Git.
+  when: item is undefined or item == ''
+  loop:
+    - "{{ db_password | default('') }}"
+    - "{{ jwt_secret | default('') }}"
+    - "{{ admin_password | default('') }}"
+  no_log: true
+
+# --- Public IP (the ingress hostnames are built from it) --------------------
+- name: Detect server public IP (auto)
+  ansible.builtin.shell: "curl -fsS --max-time 10 {{ ip_detect_urls[0] }}"
+  register: ip_detected
+  changed_when: false
+  when: server_public_ip | default('') | length == 0
+
+- name: Set effective public IP fact
+  ansible.builtin.set_fact:
+    devshop_public_ip: >-
+      {{ server_public_ip if (server_public_ip | default('') | length > 0)
+                           else ip_detected.stdout }}
+
+- name: Derive external ingress hostnames
+  ansible.builtin.set_fact:
+    devshop_customer_host: "{{ devshop_public_ip }}.{{ ingress_host_suffix }}"
+    devshop_admin_host: "admin.{{ devshop_public_ip }}.{{ ingress_host_suffix }}"
+
+# --- Cluster / node readiness ------------------------------------------------
+- name: Create host secret state directory
+  ansible.builtin.file:
+    path: "{{ devshop_state_dir }}"
+    state: directory
+    mode: "0700"
+    owner: root
+    group: root
+
+- name: Wait for every node to become Ready
+  ansible.builtin.shell: |
+    set -e
+    expect={{ groups['control_plane'] | length + groups['workers'] | length }}
+    got=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2=="Ready"{c++} END{print c+0}')
+    if [ "$got" -ge "$expect" ]; then echo "OK ($got ready)"; else echo "waiting ($got/$expect)"; exit 1; fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: nodes_ready
+  until: nodes_ready.rc == 0
+  retries: 40
+  delay: 10
+  changed_when: false
+
+# --- Node placement labels ---------------------------------------------------
+# app workloads -> worker[0]; monitoring -> the remaining workers (or worker[0]
+# when there is only one). The Kustomize overlays key off this.
+- name: Label worker nodes for workload placement
+  ansible.builtin.shell: |
+    set -e
+    NODE="{{ hostvars[item]['ansible_hostname'] }}"
+    if [ "{{ hostvars[item]['node_role'] | default('app') }}" = "monitoring" ]; then
+      kubectl label --overwrite node "$NODE" {{ monitoring_node_label }}={{ label_value }} >/dev/null
+    else
+      kubectl label --overwrite node "$NODE" {{ app_node_label }}={{ label_value }} >/dev/null
+      # Single-worker cluster: let it run the monitoring stack too.
+      if [ {{ groups['workers'] | length }} -eq 1 ]; then
+        kubectl label --overwrite node "$NODE" {{ monitoring_node_label }}={{ label_value }} >/dev/null
+      fi
+    fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ groups['workers'] }}"
+  changed_when: false
+
+- name: Show node labels
+  ansible.builtin.command:
+    cmd: kubectl get nodes --show-labels
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+# --- Storage / ingress / Argo CD ---------------------------------------------
+- name: Install local-path StorageClass (PostgreSQL persistence)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-storage.sh"
+
+- name: Install NGINX Ingress Controller (NodePort)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-ingress.sh"
+
+- name: Install Argo CD and register the DevShop Application
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-argocd.sh"
+  environment:
+    ARGO_VERSION: "{{ argocd_version }}"
+    KUBECONFIG: /root/.kube/config
+
+# --- Persist secrets on the host (reused across reruns, never printed) -------
+- name: Persist DB password secret (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ db_password }}"
+    dest: "{{ devshop_state_dir }}/db_password"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Persist JWT secret (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ jwt_secret }}"
+    dest: "{{ devshop_state_dir }}/jwt_secret"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Persist admin password (reused on subsequent runs)
+  ansible.builtin.copy:
+    content: "{{ admin_password }}"
+    dest: "{{ devshop_state_dir }}/admin_password"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+# --- DevShop secret: applied OUTSIDE Argo CD ---------------------------------
+- name: Render devshop-secret manifest
+  ansible.builtin.template:
+    src: secret.yaml.j2
+    dest: "{{ devshop_dir }}/kubernetes/overlays/aws/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Apply devshop-secret (outside Argo CD so it is never pruned)
+  ansible.builtin.command:
+    cmd: kubectl apply -f "{{ devshop_dir }}/kubernetes/overlays/aws/secret.yaml"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  changed_when: true
+
+# --- Align the Ingress hosts to the detected public IP -----------------------
+# Public IPv4 is ephemeral (no Elastic IP): patch the runtime Ingress hosts to
+# <ip>.nip.io so the app is reachable without hard-coding an IP in Git.
+- name: Patch NGINX Ingress host rules to the detected public IP
+  ansible.builtin.shell: |
+    set -e
+    kubectl patch ingress devshop-ingress -n {{ k8s_devshop_namespace }} --type='json' -p="[
+      {\"op\":\"replace\",\"path\":\"/spec/rules/0/host\",\"value\":\"{{ devshop_customer_host }}\"},
+      {\"op\":\"replace\",\"path\":\"/spec/rules/1/host\",\"value\":\"{{ devshop_admin_host }}\"}
+    ]" || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+# --- Wait for the DevShop application (GitOps) --------------------------------
+- name: Wait for Argo CD Application devshop to reach Synced + Healthy
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 60); do
+      STATE=$(kubectl -n {{ k8s_argocd_namespace }} get application devshop \
+              -o jsonpath='{.status.sync.status} {.status.health.status}' 2>/dev/null || true)
+      case "$STATE" in
+        *"Synced"*"Healthy"*) echo "Argo CD devshop: $STATE"; exit 0 ;;
+      esac
+      sleep 10
+    done
+    echo "ERROR: devshop Application not Synced+Healthy after timeout"
+    kubectl -n {{ k8s_argocd_namespace }} get application devshop -o yaml 2>/dev/null || true
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+# --- Verify the DevShop stack ------------------------------------------------
+- name: Check the DevShop pods are all Running
+  ansible.builtin.command:
+    cmd: kubectl get pods -n {{ k8s_devshop_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: app_pods
+  until: app_pods.stdout | regex_findall('Running') | length >= 4
+  retries: 40
+  delay: 10
+  changed_when: false
+
+- name: Assert all DevShop pods report Running
+  ansible.builtin.assert:
+    that:
+      - "'Running' in app_pods.stdout"
+    success_msg: "All DevShop Kubernetes pods are Running."
+
+- name: Wait for the backend actuator health through its ClusterIP Service
+  ansible.builtin.shell: |
+    set -e
+    BACKEND_IP=$(kubectl -n {{ k8s_devshop_namespace }} get svc backend \
+                 -o jsonpath='{.spec.clusterIP}')
+    for i in $(seq 1 {{ backend_health_retries }}); do
+      CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        http://$BACKEND_IP:8080/actuator/health || true)
+      [ "$CODE" = "200" ] && echo "Backend health: 200" && exit 0
+      sleep {{ backend_health_delay }}
+    done
+    echo "Backend health check failed."
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Verify customer and admin storefronts through the NGINX Ingress
+  ansible.builtin.shell: |
+    set -e
+    NP=$(kubectl -n ingress-nginx get svc ingress-nginx-controller \
+         -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+    CUST=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+           -H "Host: {{ devshop_customer_host }}" http://127.0.0.1:$NP/ || true)
+    ADMIN=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -H "Host: {{ devshop_admin_host }}" http://127.0.0.1:$NP/ || true)
+    echo "customer:$CUST admin:$ADMIN nodePort:$NP"
+    [ "$CUST" = "200" ] && [ "$ADMIN" = "200" ] || { echo "frontend check failed"; exit 1; }
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+# =============================================================================
+# Monitoring stack (Prometheus + Grafana + exporters), GitOps-managed.
+# Argo CD governs everything from Git; Ansible only renders/applies the secrets
+# that must never live in Git, then registers + waits for the application.
+# =============================================================================
+- name: Ensure monitoring namespace exists
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ monitoring_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: ns_ns
+  changed_when: false
+  failed_when: false
+
+- name: Render grafana-admin-secret (credentials, outside Argo CD)
+  ansible.builtin.template:
+    src: grafana-admin-secret.j2
+    dest: "{{ devshop_dir }}/kubernetes/monitoring/grafana/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Render postgres-exporter-secret (PostgreSQL DSN, outside Argo CD)
+  ansible.builtin.template:
+    src: postgres-exporter-secret.j2
+    dest: "{{ devshop_dir }}/kubernetes/monitoring/postgres-exporter/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Apply monitoring secrets (outside Argo CD)
+  ansible.builtin.shell: |
+    set -e
+    kubectl -n {{ monitoring_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/monitoring/grafana/secret.yaml
+    kubectl -n {{ monitoring_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/monitoring/postgres-exporter/secret.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  changed_when: true
+
+- name: Register the Argo CD 'monitoring' Application (GitOps-managed)
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ devshop_dir }}/kubernetes/argocd/application-monitoring.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Wait for the monitoring Application to become Synced + Healthy
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 90); do
+      STATE=$(kubectl -n {{ k8s_argocd_namespace }} get application monitoring \
+              -o jsonpath='{.status.sync.status} {.status.health.status}' 2>/dev/null || true)
+      case "$STATE" in
+        *"Synced"*"Healthy"*) echo "Argo CD monitoring: $STATE"; exit 0 ;;
+      esac
+      sleep 10
+    done
+    echo "ERROR: monitoring Application not Synced+Healthy after timeout"
+    kubectl -n {{ k8s_argocd_namespace }} get application monitoring -o yaml 2>/dev/null || true
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Verify Prometheus and Grafana deployments are Ready
+  ansible.builtin.command:
+    cmd: kubectl get deploy prometheus grafana -n {{ monitoring_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}:{.status.readyReplicas}:{.status.replicas}{"\n"}{end}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: mon_deploys
+  until: >
+    mon_deploys.stdout | regex_findall('1:1') | length >= 2
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Verify the backend Prometheus endpoint is returning metrics
+  ansible.builtin.shell: |
+    set -e
+    BACKEND_IP=$(kubectl -n {{ k8s_devshop_namespace }} get svc backend \
+                 -o jsonpath='{.spec.clusterIP}')
+    for i in $(seq 1 30); do
+      if curl -s --max-time 5 http://$BACKEND_IP:8080/actuator/prometheus \
+         | grep -q '^http_server_requests_seconds_count'; then
+        echo "OK: backend /actuator/prometheus exposes HTTP metrics"; exit 0
+      fi
+      sleep 10
+    done
+    echo "ERROR: backend /actuator/prometheus not returning expected metrics"
+    exit 1
+  changed_when: false
+
+# --- Report -------------------------------------------------------------------
+- name: Report deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "DevShop deployed successfully:"
+      - "  Customer:  http://{{ devshop_customer_host }}"
+      - "  Admin:     http://{{ devshop_admin_host }}"
+      - "  Backend:   http://{{ devshop_customer_host }}/api (via Nginx)"
+      - "  Public IP: {{ devshop_public_ip }}"
+      - "  Grafana (NOT public):     kubectl -n {{ monitoring_namespace }} port-forward svc/grafana 3000:3000"
+      - "  Prometheus (NOT public):  kubectl -n {{ monitoring_namespace }} port-forward svc/prometheus 9090:9090"
+      - "  Argo CD (NOT public):     kubectl -n {{ k8s_argocd_namespace }} port-forward svc/argocd-server 8080:443"

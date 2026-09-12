@@ -1,0 +1,18 @@
+# =============================================================================
+# DevShop - redeploy (no host package changes).
+#
+# Use this when the EC2 public IPv4 changed after stop/start, or to pull the
+# latest main and let Argo CD re-sync. The kubernetes_configure role is fully
+# idempotent: it re-labels nodes, re-runs the cluster addons (no-ops when they
+# exist), re-applies the DevShop secrets and re-patches the Ingress hosts to
+# the current public IP, then waits for the GitOps sync.
+#
+# Usage (from ansible/):
+#   ansible-playbook -i inventory/hosts.ini --extra-vars @../.devshop/secrets.yml playbooks/deploy.yml
+# =============================================================================
+- name: Re-sync DevShop config and application (idempotent)
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  roles:
+    - kubernetes_configure

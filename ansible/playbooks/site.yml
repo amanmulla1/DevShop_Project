@@ -1,0 +1,46 @@
+# =============================================================================
+# DevShop - full cluster bootstrap + GitOps deployment.
+#
+# Run from ./, this playbook (via the root ./deploy.sh) builds the whole
+# multi-node setup from the Terraform-created EC2 nodes:
+#
+#   1. common               -> base packages + timezone on EVERY node
+#   2. kubernetes_controlplane (control_plane) -> kubeadm init + Calico +
+#                                                 Metrics Server + join-token
+#   3. kubernetes_worker    (workers)          -> install + join the cluster
+#   4. kubernetes_configure (control_plane)    -> node labels, local-path
+#                                                 storage, NGINX ingress,
+#                                                 Argo CD, monitoring secrets,
+#                                                 wait for sync, health checks
+#
+# Secrets come from the root ./deploy.sh as --extra-vars @.devshop/secrets.yml
+# (git-ignored, mode 0600). They are never committed or printed.
+# =============================================================================
+- name: Base host prep on all nodes
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - common
+
+- name: Kubernetes control plane (kubeadm init + CNI)
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  roles:
+    - kubernetes_controlplane
+
+- name: Join worker nodes to the cluster
+  hosts: workers
+  become: true
+  gather_facts: true
+  roles:
+    - kubernetes_worker
+
+# Runs entirely from the control-plane node, referencing its own kubeconfig.
+- name: Cluster config - labels, storage, ingress, Argo CD, monitoring, health
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  roles:
+    - kubernetes_configure

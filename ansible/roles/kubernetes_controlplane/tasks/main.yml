@@ -1,0 +1,42 @@
+- name: Create deployment directory on the host
+  ansible.builtin.file:
+    path: "{{ devshop_dir }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+# The install scripts and Argo CD manifests come from this repo. Clone it once,
+# update on re-runs (force: false is non-destructive).
+- name: Clone or update the DevShop repository
+  ansible.builtin.git:
+    repo: "{{ devshop_repo }}"
+    dest: "{{ devshop_dir }}"
+    version: "{{ devshop_branch }}"
+    force: false
+    accept_hostkey: true
+
+- name: Initialize the Kubernetes control plane (kubeadm + Calico + Metrics)
+  ansible.builtin.script:
+    cmd: "{{ k8s_script_dir }}/install-kubernetes.sh"
+  environment:
+    K8S_VERSION: "{{ k8s_version }}"
+    CNI_POD_CIDR: "{{ cni_pod_cidr }}"
+  register: k8s_init
+  changed_when: "'Control plane already initialized' not in k8s_init.stdout"
+
+- name: Read the worker join command (for the workers play)
+  ansible.builtin.slurp:
+    src: "{{ join_command_path }}"
+  register: cp_join_cmd
+
+- name: Report control-plane node status
+  ansible.builtin.shell:
+    cmd: kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: nodes_out
+  until: "'control-plane' in nodes_out.stdout and ('Ready' in nodes_out.stdout)"
+  retries: 20
+  delay: 10
+  changed_when: false

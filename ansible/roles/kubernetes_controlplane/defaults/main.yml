@@ -1,0 +1,23 @@
+# =============================================================================
+# DevShop - role: kubernetes_controlplane
+#
+# Installs and initializes the Kubernetes CONTROL-PLANE node:
+#   containerd + kubeadm/kubelet/kubectl -> kubeadm init -> Calico CNI ->
+#   Metrics Server, and writes the worker join command to
+#   /etc/kubernetes/join/devshop-join-command.sh.
+#
+# Runs on the control_plane inventory group. Standard upstream Kubernetes only
+# (no K3s / MicroK8s / Minikube / Kind).
+# =============================================================================
+
+# Where the repo is cloned on the host (scripts + Argo CD manifests live there).
+devshop_dir: /opt/devshop
+devshop_repo: "https://github.com/amanmulla1/DevShop_Project.git"
+devshop_branch: main
+
+k8s_script_dir: "{{ playbook_dir }}/../../kubernetes/scripts"
+k8s_version: "1.30"
+cni_pod_cidr: "10.244.0.0/16"
+
+# Where the control-plane writes the join command for the workers.
+join_command_path: /etc/kubernetes/join/devshop-join-command.sh
