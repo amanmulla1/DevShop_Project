@@ -35,9 +35,10 @@
 //                              REQUIRED: SonarQube is a mandatory gate and the
 //                              pipeline fails fast when this is unset.
 //
-// GitOps loop prevention (requirement 27): the image-tag write-back commit is
-// tagged "[ci skip]" and the pipeline's Skip Guard stage aborts when a commit
-// only touches kubernetes/*. Configure the webhook to filter source paths too.
+// GitOps loop prevention: the image-tag write-back commit message carries
+// "[ci skip]", which the GitHub → Jenkins trigger honours, so the write-back
+// never re-triggers this pipeline. Configure the GitHub webhook to filter to
+// application source paths only (see kubernetes/README.md) for belt and braces.
 //
 // Pipeline is gated to the `main` deployment branch for build/push/deploy; the
 // test stages may run on other branches. No secrets are stored in this file.
@@ -78,36 +79,6 @@ pipeline {
     }
 
     stages {
-
-        // ---- 0. Skip guard: avoid the GitOps / infinite-loop -----------------
-        // This pipeline writes the desired image tag back into Git
-        // (kubernetes/overlays/aws/kustomization.yaml) so Argo CD can deploy.
-        // That write-back commit must NOT re-trigger this pipeline. We guard two
-        // ways:
-        //   * the write-back commit message contains "[ci skip]"; and
-        //   * if the HEAD commit only changes paths under kubernetes/, we SKIP
-        //     the entire build (path-based trigger exclusion).
-        // Configure the GitHub webhook to additionally filter to application
-        // source paths only (see kubernetes/README.md) for belt and braces.
-        stage('Skip Guard (GitOps loop prevention)') {
-            when { expression { params.BRANCH == params.BRANCH } } // always run
-            steps {
-                script {
-                    def changed = sh(
-                        script: "git diff --name-only HEAD~1 HEAD 2>/dev/null || true",
-                        returnStdout: true).tokenize('\n').collect { it.trim() }.findAll { it != '' }
-                    def onlyK8s = !changed.isEmpty() && changed.every { it.startsWith('kubernetes/') }
-                    if (onlyK8s) {
-                        echo "Commit touches only kubernetes/* - this is a GitOps manifest " +
-                             "write-back. Skipping CI to prevent an infinite loop."
-                        currentBuild.result = 'SUCCESS'
-                        error('Skipping build for GitOps-only manifest change.')
-                    } else {
-                        echo "Proceeding: relevant source changes detected."
-                    }
-                }
-            }
-        }
 
         // ---- 1. Checkout --------------------------------------------------
         stage('Checkout') {
@@ -385,9 +356,9 @@ pipeline {
                         done
 
                         git add "$FILE"
-                        # "[ci skip]" + the Skip Guard stage + webhook path filter
-                        # together prevent the GitOps write-back from re-triggering
-                        # this pipeline (no infinite loop).
+                        # "[ci skip]" (honoured by the GitHub -> Jenkins trigger)
+                        # prevents the GitOps write-back from re-triggering this
+                        # pipeline (no infinite loop).
                         git -c user.name="devshop-ci" -c user.email="ci@devshop.local" \
                             commit -m "deploy(kubernetes): point DevShop images to tag ${IMAGE_TAG} [ci skip]"
 

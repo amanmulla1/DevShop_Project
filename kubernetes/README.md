@@ -336,11 +336,13 @@ git push
 ```
 
 ### Avoiding the GitOps loop
-1. The image-tag write-back commit includes **`[ci skip]`**.
-2. The Jenkinsfile **Skip Guard** stage aborts when a commit only touches
-   `kubernetes/*`.
-3. Configure the GitHub webhook to **path-filter** to application source (e.g.
+1. The image-tag write-back commit includes **`[ci skip]`**, which the
+   GitHub → Jenkins trigger honours, so the write-back never re-triggers CI.
+2. Configure the GitHub webhook to **path-filter** to application source (e.g.
    `application/**`) so manifest write-backs never trigger Jenkins.
+
+For an extra safeguard, re-add a "Skip Guard" stage to the `Jenkinsfile` that
+aborts when the head commit only touches `kubernetes/*`.
 
 ---
 

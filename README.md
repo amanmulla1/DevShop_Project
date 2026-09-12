@@ -234,30 +234,29 @@ git push -> Jenkins (tests, build, push) -> image tag updated in Git
 ```
 
 Rollback is Git-based too: point the tag back to an older image and push. The
-pipeline's Skip Guard aborts on commits that only touch `kubernetes/*`, and the
-write-back commit is tagged `[ci skip]`, which prevents the GitOps loop. The
-Argo CD repo is public, so no repo credentials are required.
+write-back commit is tagged `[ci skip]`, which the GitHub → Jenkins trigger
+honours and prevents the GitOps loop. The Argo CD repo is public, so no repo
+credentials are required.
 
 ## CI/CD (Jenkins)
 
 `Jenkinsfile` runs declaratively on every push to `main`:
 
-1. Skip Guard (GitOps loop prevention)
-2. Checkout
-3. Monitoring config validation (read-only: parses YAML, dashboard JSON, and
+1. Checkout
+2. Monitoring config validation (read-only: parses YAML, dashboard JSON, and
    Prometheus rule files)
-4. Backend tests (Maven + JUnit)
-5. Frontend tests (Vitest + React Testing Library, customer + admin)
-6. **OWASP Dependency-Check** (SCA) — scans `pom.xml` + `package-lock.json`;
+3. Backend tests (Maven + JUnit)
+4. Frontend tests (Vitest + React Testing Library, customer + admin)
+5. **OWASP Dependency-Check** (SCA) — scans `pom.xml` + `package-lock.json`;
    CVSS ≥ 7 fails the build
-7. Backend build
-8. Frontend builds (customer + admin)
-9. **SonarQube** (quality gate) — backend + frontends; fails on a red Quality
+6. Backend build
+7. Frontend builds (customer + admin)
+8. **SonarQube** (quality gate) — backend + frontends; fails on a red Quality
    Gate (only when a server is configured via `SONAR_HOST_URL`)
-10. Docker image build + **Trivy image scan** — HIGH/CRITICAL unfixed
-    vulnerabilities in a freshly built image block the push
-11. Docker push to Docker Hub (immutable `:<BUILD_NUMBER>` tags)
-12. Image-tag write-back to `kubernetes/overlays/aws/kustomization.yaml`
+9. Docker image build + **Trivy image scan** — HIGH/CRITICAL unfixed
+   vulnerabilities in a freshly built image block the push
+10. Docker push to Docker Hub (immutable `:<BUILD_NUMBER>` tags)
+11. Image-tag write-back to `kubernetes/overlays/aws/kustomization.yaml`
 
 Jenkins does **not** run `kubectl apply` for normal deploys — Argo CD is the CD
 authority. See `jenkins/README.md` for the full setup, credentials, and the
@@ -378,7 +377,7 @@ learning setup, not HA).
 | Ingress 404 | Host not mapped: after an IP change re-run `./deploy.sh`, or map `<ip>.nip.io` / your domain via `kubectl -n devshop get ingress` |
 | PVC `Pending` | Storage class missing: run `install-storage.sh` or re-run the configure play |
 | HPA never scales | `sudo kubectl top nodes` — Metrics Server must be reporting |
-| Argo CD not syncing | Repo path/targetRevision wrong, or the write-back loop (Skip Guard aborted?) |
+| Argo CD not syncing | Repo path/targetRevision wrong, or the `[ci skip]` write-back looped — enable the webhook path filter to `application/**` |
 | Node `NotReady` / Pods evicted | The `t3.micro` is small — check memory with `sudo kubectl top nodes`; `docker`-free runs only on workers, keep replicas at 1 |
 
 ## Running locally without Docker
