@@ -1,0 +1,94 @@
+name: devshop
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: devshop-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-devshop}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Kolkata
+      PGTZ: Asia/Kolkata
+    volumes:
+      - devshop-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME:-devshop}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - devshop-network
+
+  backend:
+    build:
+      context: ./application/backend
+    image: devshop-backend:0.1.0
+    container_name: devshop-backend
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-devshop}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://${SERVER_IP:-localhost}:5173,http://${SERVER_IP:-localhost}:5174}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@devshop.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME:-DevShop Admin}
+      TZ: Asia/Kolkata
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - devshop-network
+
+  customer-frontend:
+    build:
+      context: ./application/frontend
+    image: devshop-customer-frontend:0.1.0
+    container_name: devshop-customer-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - devshop-network
+
+  admin-frontend:
+    build:
+      context: ./application/admin-frontend
+    image: devshop-admin-frontend:0.1.0
+    container_name: devshop-admin-frontend
+    restart: unless-stopped
+    ports:
+      - "5174:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - devshop-network
+
+volumes:
+  devshop-postgres-data:
+    name: devshop-postgres-data
+
+networks:
+  devshop-network:
+    name: devshop-network
