@@ -1,0 +1,16 @@
+# DevShop - placement of the monitoring workloads.
+#
+# Prometheus / Grafana / Alertmanager are placed on the monitoring worker
+# (labelled monitoring-node=yes) so they cannot OOM the app worker or the
+# control plane. On a single-worker cluster Ansible labels the same node with
+# both app-node and monitoring-node, and everything co-locates.
+#
+# node-exporter and kube-state-metrics stay un-pinned: they are tiny and (in
+# the case of node-exporter) meant to run on every node as a DaemonSet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+patchesStrategicMerge:
+  - nodeplacement/prometheus.yaml
+  - nodeplacement/grafana.yaml
+  - nodeplacement/alertmanager.yaml

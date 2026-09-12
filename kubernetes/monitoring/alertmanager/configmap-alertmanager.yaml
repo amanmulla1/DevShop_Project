@@ -1,0 +1,37 @@
+# =============================================================================
+# DevShop - Alertmanager configuration
+#
+# Routes Prometheus alerting. For this learning environment no external
+# receiver is configured by default (there is no pager/Slack/email to burden).
+# Alerts are visible in the Prometheus/Alertmanager UIs and on the Grafana
+# dashboards (threshold colouring) so operators can react.
+#
+# To enable real delivery, set a receiver URL (Slack webhook / email / PagerDuty)
+# here and commit it - the config is a non-secret ConfigMap. Credentials
+# (e.g. Slack OAuth) should still be injected via a Secret if needed.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'null'
+      routes:
+        - match:
+            severity: critical
+          receiver: 'null'
+    receivers:
+      - name: 'null'

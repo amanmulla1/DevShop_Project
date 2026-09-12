@@ -1,0 +1,24 @@
+# =============================================================================
+# DevShop - Grafana persistent storage
+#
+# Grafana dashboards (and any seeded data) persist on the grafana-data PVC
+# using the local-path StorageClass. Dashboard DEFINITIONS are provisioned from
+# Git ConfigMaps (source of truth), so this PVC mainly stores Grafana's own
+# database, plugin state, and any UI-created changes.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

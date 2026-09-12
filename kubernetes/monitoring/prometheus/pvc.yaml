@@ -1,0 +1,28 @@
+# =============================================================================
+# DevShop - Prometheus persistent storage
+#
+# Prometheus time-series data is stored on `prometheus-data` using the
+# `local-path` StorageClass (independent, open-source provisioner installed by
+# install-storage.sh). Retention is NOT unlimited - it is configured to 15 days
+# for this low-cost, single-node environment (see
+# configmap-prometheus.yaml - storage.tsdb.retention.time). A modest 10Gi is
+# plenty for a small cluster with a ~15 day retention at default scrape rates.
+#
+# Monitoring storage is isolated from application (PostgreSQL) storage.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: monitoring
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi

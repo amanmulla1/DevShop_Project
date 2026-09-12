@@ -1,0 +1,23 @@
+# =============================================================================
+# DevShop - kube-state-metrics Service
+#
+# Prometheus scrapes kube-state-metrics at kube-state-metrics.monitoring:8080
+# via kubernetes_sd role:endpoints. Not exposed publicly.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+    app.kubernetes.io/part-of: devshop
+    app.kubernetes.io/component: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: 8080
