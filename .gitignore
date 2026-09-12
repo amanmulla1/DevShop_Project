@@ -33,6 +33,13 @@ kubernetes/monitoring/postgres-exporter/secret.yaml
 node_modules/
 dist/
 
+# DevSecOps scan outputs (local runs; CI machines write these too)
+reports/
+.scannerwork/
+dependency-check-report.*
+trivy-*.html
+*.sarif
+
 # IDE / OS
 .idea/
 .vscode/

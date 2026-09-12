@@ -3,9 +3,17 @@
 //
 // Original Phase 5 flow deployed to EC2 via Docker Compose over SSH.
 // Phase 6 transitions deployment to GitOps:
-//   GitHub -> checkout -> tests -> build -> Docker images -> Docker Hub
+//   GitHub -> checkout -> tests -> build -> DevSecOps gates -> push images
 //     -> update the Kubernetes image tag in Git
 //       -> Argo CD detects the Git change -> syncs -> Kubernetes rollout
+//
+// DevSecOps gates (this file) - ALL MANDATORY. A failed gate stops the
+// pipeline; the build only goes ahead when every gate passes:
+//   * OWASP Dependency-Check (SCA)     - vulnerable dependencies block the build.
+//   * SonarQube Analysis (quality)     - blocked by the server-side Quality Gate.
+//       The stage fails fast (it is NOT skipped) if SONAR_HOST_URL is unset.
+//   * Trivy Image Scan (security)      - HIGH/CRITICAL vulnerabilities in a freshly
+//       built image block the push, so the vulnerable image is NEVER deployed.
 //
 // Jenkins does NOT run kubectl apply as the normal deploy path (Phase 6
 // requirement). Argo CD performs the actual deployment from Git.
@@ -15,12 +23,17 @@
 //   * github-token           - GitHub PAT used to push the Kubernetes manifest /
 //                              image-tag write-back to the repo (required).
 //   * dockerhub-credentials  - Docker Hub username + ACCESS TOKEN (not password).
+//   * sonarqube-token        - Secret text token for the SonarQube server
+//                              (only needed when SONAR_HOST_URL is set).
 //   * devshop-ec2-ssh        - No longer used by this pipeline; kept for optional
 //                              read-only cluster checks (see README).
 //
 // Configurable values (set in Jenkins, NOT hard-coded in app source):
 //   * REGISTRY               - Docker Hub namespace (build parameter, default shown).
 //   * BRANCH                 - Git branch to build/deploy (default main).
+//   * SONAR_HOST_URL         - Jenkins GLOBAL env var; e.g. http://<jenkins-host>:9000.
+//                              REQUIRED: SonarQube is a mandatory gate and the
+//                              pipeline fails fast when this is unset.
 //
 // GitOps loop prevention (requirement 27): the image-tag write-back commit is
 // tagged "[ci skip]" and the pipeline's Skip Guard stage aborts when a commit
@@ -51,6 +64,11 @@ pipeline {
         BACKEND_IMAGE       = "${params.REGISTRY}/devshop-backend"
         FRONTEND_IMAGE      = "${params.REGISTRY}/devshop-frontend"
         ADMIN_FRONTEND_IMAGE = "${params.REGISTRY}/devshop-admin-frontend"
+
+        // SonarQube server. Set as a Jenkins GLOBAL env var (Manage Jenkins ->
+        // System -> Global properties -> Environment variables). REQUIRED: the
+        // SonarQube stage is a mandatory gate and fails fast when this is empty.
+        SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: ''}"
     }
 
     options {
@@ -209,6 +227,19 @@ pipeline {
             }
         }
 
+        // ---- 3b. OWASP Dependency-Check (SCA, MANDATORY gate) ---------------
+        // Scans the backend pom.xml AND both frontends' package-lock.json for
+        // known-vulnerable components. Any finding with CVSS >= 7 (HIGH/CRITICAL)
+        // fails the build, so a vulnerable dependency never reaches an image.
+        // Runs on EVERY pipeline invocation (all branches). Runs via the
+        // owasp/dependency-check container (see scripts/). If it fails, the
+        // pipeline stops here - the build does not go ahead.
+        stage('OWASP Dependency Check (SCA)') {
+            steps {
+                sh 'bash scripts/ci-owasp-dependency-check.sh'
+            }
+        }
+
         // ---- 4. Backend build ---------------------------------------------
         stage('Backend Build') {
             when { expression { params.BRANCH == 'main' } }
@@ -241,6 +272,45 @@ pipeline {
             }
         }
 
+        // ---- 5b. SonarQube Analysis (MANDATORY quality gate) ---------------
+        // Code-quality/smell analysis for the backend (Java, via the Maven
+        // sonar plugin) and both frontends (TS/React, via the official
+        // sonar-scanner-cli container). Both wait on the server-side Quality
+        // Gate (sonar.qualitygate.wait=true), so a red gate FAILS the build.
+        //
+        // MANDATORY: this stage runs on EVERY pipeline invocation. It is NOT
+        // optional - if SONAR_HOST_URL is not configured the pipeline fails fast
+        // here with setup instructions (jenkins/sonarqube/README.md). There is no
+        // code path that skips the quality gate.
+        stage('SonarQube Analysis (quality gate)') {
+            steps {
+                script {
+                    if (!(env.SONAR_HOST_URL ?: '')) {
+                        error('SonarQube is a MANDATORY gate and no server is configured. ' +
+                              'Set SONAR_HOST_URL (Jenkins global env) and add the ' +
+                              "'sonarqube-token' secret-text credential. " +
+                              'See jenkins/sonarqube/README.md. The pipeline stops here.')
+                    }
+                }
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    // Backend: sonar-project.properties lives in the module root.
+                    dir('application/backend') {
+                        sh 'mvn -Pdevsecops -DskipTests verify sonar:sonar -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.token=${SONAR_TOKEN}'
+                    }
+                    // Frontends: the root sonar-project.properties defines both
+                    // React apps' sources relative to the workspace base dir.
+                    sh '''
+                        docker run --rm \
+                          -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+                          -e SONAR_TOKEN="${SONAR_TOKEN}" \
+                          -v "${WORKSPACE}:/usr/src" \
+                          sonarsource/sonar-scanner-cli:latest \
+                          -Dsonar.projectBaseDir=/usr/src
+                    '''
+                }
+            }
+        }
+
         // ---- 6. Docker build ------------------------------------------------
         stage('Docker Build') {
             when { expression { params.BRANCH == 'main' } }
@@ -248,6 +318,21 @@ pipeline {
                 sh 'docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} -t ${BACKEND_IMAGE}:${LATEST_TAG} application/backend'
                 sh 'docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} -t ${FRONTEND_IMAGE}:${LATEST_TAG} application/frontend'
                 sh 'docker build -t ${ADMIN_FRONTEND_IMAGE}:${IMAGE_TAG} -t ${ADMIN_FRONTEND_IMAGE}:${LATEST_TAG} application/admin-frontend'
+            }
+        }
+
+        // ---- 6b. Trivy Image Scan (MANDATORY security gate) ----------------
+        // Scans the three freshly-built images for vulnerabilities. HIGH/CRITICAL
+        // unfixed findings FAIL the build BEFORE the push, so a vulnerable image
+        // can never be pushed to Docker Hub nor reached by Argo CD.
+        //
+        // Runs immediately after Docker Build (images exist at this point) and
+        // BEFORE Docker Push - it is enforced on every image the pipeline
+        // produces (the release flow). A failing scan aborts the pipeline here.
+        stage('Trivy Image Scan (container security)') {
+            when { expression { params.BRANCH == 'main' } }
+            steps {
+                sh 'bash scripts/ci-trivy-scan.sh ${BACKEND_IMAGE}:${IMAGE_TAG} ${FRONTEND_IMAGE}:${IMAGE_TAG} ${ADMIN_FRONTEND_IMAGE}:${IMAGE_TAG}'
             }
         }
 
@@ -322,6 +407,7 @@ pipeline {
             echo "Build:         #${BUILD_NUMBER}"
             echo "Images:        ${BACKEND_IMAGE}:${IMAGE_TAG} / " +
                  "${FRONTEND_IMAGE}:${IMAGE_TAG} / ${ADMIN_FRONTEND_IMAGE}:${IMAGE_TAG}"
+            echo "DevSecOps:     OWASP Dependency-Check / SonarQube / Trivy gates consulted"
             echo "Deployment:    GitOps -> Argo CD -> Kubernetes (devshop namespace)"
             echo '--------------------------------------------------------------'
         }

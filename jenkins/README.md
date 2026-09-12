@@ -7,15 +7,17 @@ Hub integration, deployment, rollback, and troubleshooting.
 ## Pipeline overview
 
 ```
-Developer -> git push -> GitHub -> Jenkins -> checkout -> tests -> build
-  -> Docker images -> Docker Hub -> deploy to AWS EC2 (Docker Compose)
-  -> health checks -> deployment successful
+Developer -> git push -> GitHub -> Jenkins -> checkout -> tests -> DevSecOps gates
+  -> build -> Docker images -> Trivy scan -> Docker Hub
+    -> update the Kubernetes image tag in Git
+      -> Argo CD detects the Git change -> syncs -> Kubernetes rollout
 ```
 
 The pipeline is defined in the repository-root [`Jenkinsfile`](../Jenkinsfile)
 (Declarative Pipeline) and is CI/CD-only. It **does not** manage infrastructure:
-Terraform stays the owner of AWS infrastructure, and Docker Compose remains the
-runtime on the EC2 host.
+Terraform stays the owner of AWS infrastructure, and Argo CD (GitOps) is the CD
+authority that deploys to Kubernetes — Jenkins only writes the desired image tag
+back into Git.
 
 ## Pipeline stages
 
@@ -23,15 +25,27 @@ runtime on the EC2 host.
 2. **Backend Tests** — `mvn clean test` in `application/backend`.
 3. **Customer Frontend Tests** — `npm ci` + `npm test -- --run` in `application/frontend`.
 4. **Admin Frontend Tests** — `npm ci` + `npm test -- --run` in `application/admin-frontend`.
-5. **Backend Build** — `mvn -DskipTests package` (tests already ran in stage 2).
-6. **Frontend Build** — `npm run build` for both frontends (parallel).
-7. **Docker Build** — build the three images, tagged `:${BUILD_NUMBER}` and `:latest`.
-8. **Docker Push** — push all three images (immutable tag + `latest`) to Docker Hub.
-9. **Deploy to EC2** — SSH to the EC2 host, pull the images, `docker compose up -d`.
-10. **Health Check** — verify backend health, products API, and both frontends.
+5. **OWASP Dependency Check (SCA)** — scans `pom.xml` + both `package-lock.json`
+   files for vulnerable components; CVSS ≥ 7 fails the build.
+6. **Backend Build** — `mvn -DskipTests package` (tests already ran in stage 2).
+7. **Frontend Build** — `npm run build` for both frontends (parallel).
+8. **SonarQube Analysis** — code-quality/smell analysis for the backend (Maven
+   sonar plugin) and both frontends (sonar-scanner-cli). Red Quality Gate fails
+   the build. **Mandatory** — the pipeline fails fast if `SONAR_HOST_URL` is unset.
+9. **Docker Build** — build the three images, tagged `:${BUILD_NUMBER}` and `:latest`.
+10. **Trivy Image Scan** — scans the three freshly-built images; HIGH/CRITICAL
+    unfixed findings fail the build **before** the push.
+11. **Docker Push** — push all three images (immutable tag + `latest`) to Docker Hub.
+12. **Update Image Tag in Git (GitOps)** — write the immutable `:${BUILD_NUMBER}`
+    tag into `kubernetes/overlays/aws/kustomization.yaml` and push with `[ci skip]`
+    so Argo CD rolls out.
 
-Stages 5–10 are gated to the **`main`** branch (`when { branch 'main' }`). Test
-stages may run on any branch.
+**All DevSecOps gates are mandatory.** A failed gate aborts the pipeline — the
+build only goes ahead when every gate passes. OWASP and SonarQube run on
+**every** pipeline invocation (all branches); Trivy runs on the `main` release
+flow (it scans the images this run produced, which are only built on `main`) and
+sits between Docker Build and Docker Push so a vulnerable push is impossible.
+Test, build, push, and the GitOps write-back are gated to `main` as before.
 
 ### Image names and tags
 
@@ -137,9 +151,10 @@ In **Jenkins → Manage Jenkins → Credentials**, create the following credenti
 
 | Credential ID | Type | Value |
 |---------------|------|-------|
-| `github-token` | Username with password | GitHub personal access token (fine-grained, `Contents: read`). Used for SCM checkout if the repo becomes private. The repo is public, so this is optional. |
+| `github-token` | Username with password | GitHub personal access token (fine-grained, `Contents: read+write` for the image-tag write-back to `main`). |
 | `dockerhub-credentials` | Username with password | Docker Hub **username** + an **access token** (preferred over the account password). |
-| `devshop-ec2-ssh` | SSH key (username + private key) | The EC2 host's SSH username (e.g. `ubuntu`) and the **private key** `.pem` contents. |
+| `sonarqube-token` | Secret text | SonarQube analysis token (see [sonarqube/README.md](sonarqube/README.md)). Only needed if you run the SonarQube gate. |
+| `devshop-ec2-ssh` | SSH key (username + private key) | Legacy EC2 host key from the Docker-Compose deploy era; not used by the GitOps pipeline — kept for optional read-only cluster checks. |
 
 Do **not** place any of these values in the `Jenkinsfile`, in Git, in a
 `.env`, or in a Docker image.
@@ -159,6 +174,66 @@ no secrets and **no EC2 IP** are hard-coded in source:
 
 Set `EC2_HOST` (and optionally `EC2_USER`/`DEVSHOP_APP_DIR`) under
 **Manage Jenkins → System → Global properties → Environment variables**.
+
+## DevSecOps gates
+
+Three security/quality gates run in the pipeline **and all are mandatory** — a
+failed gate aborts the pipeline and the build does not go ahead:
+
+| Stage | Tool | What it scans | Fails when | How |
+|-------|------|---------------|------------|-----|
+| OWASP Dependency Check | `owasp/dependency-check` | Backend `pom.xml`, both frontends `package-lock.json` | any vulnerable component with CVSS ≥ 7 | `scripts/ci-owasp-dependency-check.sh` |
+| SonarQube Analysis | `sonar-maven-plugin` + `sonarsource/sonar-scanner-cli` | Backend Java source / Frontend TS+React source | server Quality Gate (red) **or** no server configured (fail-fast) | `application/backend/sonar-project.properties` + root `sonar-project.properties` |
+| Trivy Image Scan | `aquasec/trivy` | the 3 freshly-built images | HIGH/CRITICAL **unfixed** vulnerabilities | `scripts/ci-trivy-scan.sh` |
+
+Run order: OWASP → (build) → SonarQube → Docker Build → **Trivy scans the
+built images** → Docker Push → Git tag write-back. Trivy sits *between* Build
+and Push on purpose: a vulnerable image is never pushed to Docker Hub and
+never reaches Argo CD.
+
+### Required setup
+
+- **Docker images** — all three tools run as one-off containers (`docker run`),
+  pulled on demand from Docker Hub. No plugin installation needed beyond the
+  ones already listed. The Jenkins user needs docker access (see
+  [Prerequisites](#prerequisites-on-the-jenkins-host)).
+- **`NVD_API_KEY` (optional)** — for OWASP, the NVD 2.0 API key (free from
+  NVD) removes rate-limit throttling. Set it as a Jenkins *global* environment
+  variable; the scan works without it.
+- **SonarQube server + `sonarqube-token` (REQUIRED**) — follow
+  [`jenkins/sonarqube/README.md`](sonarqube/README.md) to self-host SonarQube,
+  generate a token, and set `SONAR_HOST_URL` (Jenkins global env). SonarQube is
+  a **mandatory** gate: without these the pipeline fails fast at the analysis
+  stage instead of skipping it.
+
+### Local runs
+
+```bash
+# Dependency check (SCA) — from the repo root
+bash scripts/ci-owasp-dependency-check.sh
+
+# Trivy image scan — build first, then scan the images
+docker build -t amanmulla1/devshop-backend:local application/backend
+bash scripts/ci-trivy-scan.sh amanmulla1/devshop-backend:local
+
+# SonarQube (server must be up) — backend via Maven, frontends via scanner
+cd application/backend && mvn -Pdevsecops -DskipTests verify sonar:sonar \
+  -Dsonar.host.url=http://<sonar-host>:9000 -Dsonar.token=<token> && cd ../..
+docker run --rm -e SONAR_HOST_URL=http://<sonar-host>:9000 -e SONAR_TOKEN=<token> \
+  -v "$PWD:/usr/src" sonarsource/sonar-scanner-cli:latest -Dsonar.projectBaseDir=/usr/src
+```
+
+Scan reports (HTML/JSON) are written to `reports/` (git-ignored) for inspection.
+
+### Known trade-offs
+
+- Trivy/Dependency-check need internet access from the Jenkins host to update
+  their vulnerability feeds (Trivy DB, NVD). The NVD feed is large; the first
+  OWASP run is slow (10+ min) — subsequent runs use the cached feed under
+  `~/.cache/dependency-check`.
+- `npm ci` runs as root in the frontend test stage; `reports/` and cache dirs
+  are written by containers as root — clean up with `sudo rm -rf reports`
+  if needed.
 
 ## Docker Hub integration
 

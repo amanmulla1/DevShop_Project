@@ -103,4 +103,36 @@
         </plugins>
     </build>
 
+    <!--
+      DevSecOps tooling (OPT-IN, not part of normal builds).
+      Activated only by the CI pipeline / local runs:
+        mvn -Pdevsecops verify sonar:sonar -Dsonar.host.url=... -Dsonar.token=...
+        mvn -Pdevsecops dependency-check:check
+    -->
+    <profiles>
+        <profile>
+            <id>devsecops</id>
+            <build>
+                <plugins>
+                    <!-- SonarQube scanner (code quality analysis). -->
+                    <plugin>
+                        <groupId>org.sonarsource.scanner.maven</groupId>
+                        <artifactId>sonar-maven-plugin</artifactId>
+                        <version>4.0.0.4121</version>
+                    </plugin>
+                    <!-- OWASP Dependency-Check (dependency vulnerability scan). -->
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>9.2.0</version>
+                        <configuration>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                            <format>HTML,JSON</format>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>
