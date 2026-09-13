@@ -49,6 +49,8 @@ data:
 
     scrape_configs:
       # --- DevShop Spring Boot backend /actuator/prometheus (Micrometer) -----
+      # Prometheus is injected with an Envoy sidecar so it can reach this port
+      # over mTLS; no special auth config is needed here.
       - job_name: devshop-backend
         honor_labels: true
         metrics_path: /actuator/prometheus
@@ -64,6 +66,51 @@ data:
           - source_labels: [__meta_kubernetes_pod_container_port_number]
             action: keep
             regex: "8080"
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__address__]
+            target_label: instance
+
+      # --- Istio mesh telemetry (Envoy sidecar /stats/prometheus) -----------
+      # Scrape every sidecar's envoy stats endpoint on port 15090. These are
+      # plaintext Prometheus stats (not Envoy metrics to be mTLS-encrypted) and
+      # cover the core istio_requests_*, istio_tcp_* request counters used by
+      # the Istio Grafana dashboards.
+      - job_name: istio-mesh
+        honor_labels: true
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - devshop
+                - monitoring
+                - istio-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: "http-envoy-prom"
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+
+      # --- istiod (Pilot) telemetry + debug metrics ----------------------------
+      - job_name: istiod
+        honor_labels: true
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - istio-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: istiod
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: "http-monitoring"
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
           - source_labels: [__meta_kubernetes_namespace]

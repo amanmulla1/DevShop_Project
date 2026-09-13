@@ -3,8 +3,9 @@
 #
 # Post-cluster configuration, all driven from the control-plane node:
 #   node labels (app / monitoring placement) -> local-path storage ->
-#   NGINX ingress -> Argo CD -> DevShop Secret (outside Argo CD) ->
-#   monitoring secrets -> wait for GitOps sync -> health checks.
+#   Istio service mesh -> Argo CD -> DevShop Secret (outside Argo CD) ->
+#   Kiali/Jaeger add-ons -> monitoring secrets -> wait for GitOps sync ->
+#   health checks.
 #
 # Secrets are supplied by the root ./deploy.sh via --extra-vars
 # @.devshop/secrets.yml and are never committed or printed.
@@ -19,13 +20,22 @@ k8s_argocd_namespace: argocd
 k8s_devshop_namespace: devshop
 monitoring_namespace: monitoring
 
+# --- NGINX Ingress has been replaced by the Istio service mesh. --------------
+# The Istio control plane replaces the old ingress controller as the cluster's
+# L7 edge. External hostnames for the Istio gateway still use nip.io
+# (<ip>.nip.io resolves to the IP) and are patched into the Gateway +
+# VirtualServices at deploy time.
+istio_version: "1.23.6"
+istio_namespace: istio-system
+
 # Public IP auto-detection (empty = detect at deploy time).
 server_public_ip: ""
 ip_detect_urls:
   - https://api.ipify.org
   - https://ifconfig.me/ip
 
-# External hostnames for the NGINX ingress (nip.io resolves *.ip.nip.io to IP).
+# External hostnames for the Istio ingress gateway (nip.io resolves *.<ip>.nip.io
+# to the IP).
 ingress_host_suffix: nip.io
 
 # Health-check retries / delays.
@@ -50,3 +60,7 @@ grafana_admin_password: ""
 # postgres_exporter DSN is built from db_username + db_password.
 db_username: devshop
 db_password: ""
+
+# Kiali mesh-UI credentials (rendered OUTSIDE Git into the kiali Secret).
+kiali_admin_user: admin
+kiali_admin_password: ""

@@ -1,0 +1,96 @@
+# =============================================================================
+# DevShop - Kiali service mesh observability UI
+#
+# Standalone Kiali (no operator) - enough for a single-cluster mesh. It reads
+# the existing Prometheus (monitoring namespace) for graph metrics and Istio
+# telemetry, and Jaeger (istio-system) for distributed traces.
+#
+# Admin credentials live in the `kiali` Secret, which is rendered OUTSIDE Git
+# by the Ansible bootstrap (see secret.example.yaml for the shape). This
+# follows the Grafana / devshop-secret pattern: real secrets never commit and
+# are never pruned.
+#
+# v1.89.x is pinned because it is the release line paired with Istio 1.23.
+# Kiali runs in view-only mode: perfect for inspecting the mesh without any
+# edit permissions or extra RBAC risk on a learning cluster.
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kiali-service-account
+  namespace: istio-system
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kiali
+  namespace: istio-system
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kiali
+  template:
+    metadata:
+      labels:
+        app: kiali
+    spec:
+      serviceAccountName: kiali-service-account
+      containers:
+        - name: kiali
+          image: quay.io/kiali/kiali:v1.89.7
+          ports:
+            - name: http
+              containerPort: 20001
+          env:
+            - name: ACTIVE_NAMESPACE
+              value: devshop
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 384Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          volumeMounts:
+            - name: kiali-config
+              mountPath: /kiali-config
+              readOnly: true
+      volumes:
+        - name: kiali-config
+          configMap:
+            name: kiali
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kiali
+  namespace: istio-system
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+spec:
+  selector:
+    app: kiali
+  ports:
+    - name: http
+      port: 20001
+      protocol: TCP

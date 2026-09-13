@@ -15,6 +15,8 @@
     - "{{ db_password | default('') }}"
     - "{{ jwt_secret | default('') }}"
     - "{{ admin_password | default('') }}"
+    - "{{ grafana_admin_password | default('') }}"
+    - "{{ kiali_admin_password | default('') }}"
   no_log: true
 
 # --- Public IP (the ingress hostnames are built from it) --------------------
@@ -86,14 +88,20 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-# --- Storage / ingress / Argo CD ---------------------------------------------
+# --- Storage / Istio / Argo CD ------------------------------------------------
 - name: Install local-path StorageClass (PostgreSQL persistence)
   ansible.builtin.script:
     cmd: "{{ k8s_script_dir }}/install-storage.sh"
 
-- name: Install NGINX Ingress Controller (NodePort)
+# Istio replaces the old NGINX Ingress Controller as the cluster's L7 edge.
+# install-istio.sh also labels the devshop + monitoring namespaces for sidecar
+# injection (individual monitoring workloads opt out via annotations).
+- name: Install Istio control plane + ingress gateway (replaces NGINX Ingress)
   ansible.builtin.script:
-    cmd: "{{ k8s_script_dir }}/install-ingress.sh"
+    cmd: "{{ k8s_script_dir }}/install-istio.sh"
+  environment:
+    ISTIO_VERSION: "{{ istio_version }}"
+    KUBECONFIG: /root/.kube/config
 
 - name: Install Argo CD and register the DevShop Application
   ansible.builtin.script:
@@ -148,15 +156,25 @@
   no_log: true
   changed_when: true
 
-# --- Align the Ingress hosts to the detected public IP -----------------------
-# Public IPv4 is ephemeral (no Elastic IP): patch the runtime Ingress hosts to
-# <ip>.nip.io so the app is reachable without hard-coding an IP in Git.
-- name: Patch NGINX Ingress host rules to the detected public IP
+# --- Align the Istio gateway hosts to the detected public IP -----------------
+# Public IPv4 is ephemeral (no Elastic IP): patch the runtime Gateway +
+# VirtualService hosts to <ip>.nip.io so the app is reachable without
+# hard-coding an IP in Git (same pattern as the old NGINX ingress). Argo CD
+# manages these resources, so self-heal may revert the patch on the next sync;
+# the hostnames are also overridable by setting server_public_ip in the root
+# ./deploy.sh environment.
+- name: Patch Istio Gateway hosts to the detected public IP
   ansible.builtin.shell: |
     set -e
-    kubectl patch ingress devshop-ingress -n {{ k8s_devshop_namespace }} --type='json' -p="[
-      {\"op\":\"replace\",\"path\":\"/spec/rules/0/host\",\"value\":\"{{ devshop_customer_host }}\"},
-      {\"op\":\"replace\",\"path\":\"/spec/rules/1/host\",\"value\":\"{{ devshop_admin_host }}\"}
+    kubectl -n {{ istio_namespace }} patch gateway devshop-gateway --type='json' -p="[
+      {\"op\":\"replace\",\"path\":\"/spec/servers/0/hosts/0\",\"value\":\"{{ devshop_customer_host }}\"},
+      {\"op\":\"replace\",\"path\":\"/spec/servers/0/hosts/1\",\"value\":\"{{ devshop_admin_host }}\"}
+    ]" || true
+    kubectl -n {{ k8s_devshop_namespace }} patch vs devshop-customer --type='json' -p="[
+      {\"op\":\"replace\",\"path\":\"/spec/hosts/0\",\"value\":\"{{ devshop_customer_host }}\"}
+    ]" || true
+    kubectl -n {{ k8s_devshop_namespace }} patch vs devshop-admin --type='json' -p="[
+      {\"op\":\"replace\",\"path\":\"/spec/hosts/0\",\"value\":\"{{ devshop_admin_host }}\"}
     ]" || true
   environment:
     KUBECONFIG: /root/.kube/config
@@ -199,34 +217,42 @@
       - "'Running' in app_pods.stdout"
     success_msg: "All DevShop Kubernetes pods are Running."
 
-- name: Wait for the backend actuator health through its ClusterIP Service
+# STRICT mTLS means a control-plane host can no longer curl the backend ClusterIP
+# directly. Instead we verify end-to-end THROUGH the mesh: each request crosses
+# the istio-ingressgateway, an Envoy sidecar, the frontend nginx, and reaches the
+# backend - which exercises real mTLS on every hop.
+- name: Verify DevShop endpoints through the Istio ingress gateway (mTLS path)
   ansible.builtin.shell: |
     set -e
-    BACKEND_IP=$(kubectl -n {{ k8s_devshop_namespace }} get svc backend \
-                 -o jsonpath='{.spec.clusterIP}')
+    NP=$(kubectl -n {{ istio_namespace }} get svc istio-ingressgateway \
+         -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
+    CUST=000; ADMIN=000; API=000
     for i in $(seq 1 {{ backend_health_retries }}); do
-      CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-        http://$BACKEND_IP:8080/actuator/health || true)
-      [ "$CODE" = "200" ] && echo "Backend health: 200" && exit 0
+      CUST=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+             -H "Host: {{ devshop_customer_host }}" http://127.0.0.1:$NP/ || true)
+      ADMIN=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              -H "Host: {{ devshop_admin_host }}" http://127.0.0.1:$NP/ || true)
+      API=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -H "Host: {{ devshop_customer_host }}" http://127.0.0.1:$NP/api/products || true)
+      [ "$CUST" = "200" ] && [ "$ADMIN" = "200" ] && [ "$API" = "200" ] && { echo "all endpoints healthy"; break; }
       sleep {{ backend_health_delay }}
     done
-    echo "Backend health check failed."
-    exit 1
+    echo "gateway nodePort:$NP customer:$CUST admin:$ADMIN api/products:$API"
+    [ "$CUST" = "200" ] && [ "$ADMIN" = "200" ] && [ "$API" = "200" ] || { echo "gateway endpoint check failed"; exit 1; }
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-- name: Verify customer and admin storefronts through the NGINX Ingress
+# Sidecars are present and the namespace is STRICT mTLS: assert each pod is
+# actually running 2/2 containers (app + istio-proxy) and injection is labelled.
+- name: Assert all DevShop pods have an Envoy sidecar (2/2 containers)
   ansible.builtin.shell: |
     set -e
-    NP=$(kubectl -n ingress-nginx get svc ingress-nginx-controller \
-         -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
-    CUST=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-           -H "Host: {{ devshop_customer_host }}" http://127.0.0.1:$NP/ || true)
-    ADMIN=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-            -H "Host: {{ devshop_admin_host }}" http://127.0.0.1:$NP/ || true)
-    echo "customer:$CUST admin:$ADMIN nodePort:$NP"
-    [ "$CUST" = "200" ] && [ "$ADMIN" = "200" ] || { echo "frontend check failed"; exit 1; }
+    MISSING=$(kubectl -n {{ k8s_devshop_namespace }} get pods \
+      --no-headers -o jsonpath='{range .items[*]}{.metadata.name}{" ready="}{.status.containerStatuses|length}{"\n"}{end}' \
+      | awk -F'ready=' '$2 != 2 {print}')
+    if [ -n "$MISSING" ]; then echo "$MISSING"; echo "a pod is missing its sidecar"; exit 1; fi
+    echo "OK: every DevShop pod has 2/2 containers (app + istio-proxy)."
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
@@ -312,19 +338,75 @@
   delay: 10
   changed_when: false
 
-- name: Verify the backend Prometheus endpoint is returning metrics
+# --- Kiali + Jaeger add-ons (istio-system) -----------------------------------
+# Applied OUTSIDE Argo CD (same lifecycle as the Istio platform install), with
+# the Kiali admin credentials rendered from root ./deploy.sh secrets. Kiali and
+# Jaeger are NOT exposed publicly - use port-forwards.
+- name: Render kiali admin secret (credentials, outside Git/Argo CD)
+  ansible.builtin.template:
+    src: kiali-secret.j2
+    dest: "{{ devshop_dir }}/kubernetes/istio/addons/kiali/secret.yaml"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Apply Kiali secret + Kiali/Jaeger add-ons (istio-system)
   ansible.builtin.shell: |
     set -e
-    BACKEND_IP=$(kubectl -n {{ k8s_devshop_namespace }} get svc backend \
-                 -o jsonpath='{.spec.clusterIP}')
+    kubectl -n {{ istio_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/istio/addons/kiali/secret.yaml
+    kubectl -n {{ istio_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/istio/addons/kiali/deployment.yaml
+    kubectl -n {{ istio_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/istio/addons/kiali/configmap.yaml
+    kubectl -n {{ istio_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/istio/addons/kiali/rbac.yaml
+    kubectl -n {{ istio_namespace }} apply -f \
+      {{ devshop_dir }}/kubernetes/istio/addons/jaeger/deployment.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  changed_when: true
+
+- name: Wait for Kiali and Jaeger to be Ready
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 60); do
+      K=$(kubectl -n {{ istio_namespace }} get deploy kiali -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+      J=$(kubectl -n {{ istio_namespace }} get deploy jaeger -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+      if [ "${K:-0}" = "1" ] && [ "${J:-0}" = "1" ]; then echo "OK: Kiali and Jaeger are Ready."; exit 0; fi
+      sleep 10
+    done
+    echo "ERROR: Kiali/Jaeger not ready after timeout"
+    kubectl -n {{ istio_namespace }} get deploy kiali jaeger 2>/dev/null || true
+    exit 1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+# STRICT mTLS blocked the old host->ClusterIP curl, so backend app metrics are
+# verified through Prometheus: the mesh-injected Prometheus pod scrapes both the
+# Spring Boot /actuator/prometheus endpoint (over mTLS) and the Envoy mesh
+# telemetry. promtool ships inside the Prometheus image.
+- name: Verify backend app metrics + Istio mesh telemetry reach Prometheus
+  ansible.builtin.shell: |
+    set -e
     for i in $(seq 1 30); do
-      if curl -s --max-time 5 http://$BACKEND_IP:8080/actuator/prometheus \
-         | grep -q '^http_server_requests_seconds_count'; then
-        echo "OK: backend /actuator/prometheus exposes HTTP metrics"; exit 0
+      B=$(kubectl -n {{ monitoring_namespace }} exec deploy/prometheus -- \
+          promtool query instant 'http://127.0.0.1:9090' 'up{job="devshop-backend"}' 2>/dev/null || true)
+      M=$(kubectl -n {{ monitoring_namespace }} exec deploy/prometheus -- \
+          promtool query instant 'http://127.0.0.1:9090' 'count(istio_requests_total)' 2>/dev/null || true)
+      if echo "$B" | grep -q 'value: 1'; then
+        if echo "$M" | grep -q 'value: [1-9]'; then
+          echo "OK: devshop-backend scrape UP (via Prometheus sidecar -> mTLS)"
+          echo "OK: istio_requests_total telemetry is flowing into Prometheus"
+          exit 0
+        fi
       fi
       sleep 10
     done
-    echo "ERROR: backend /actuator/prometheus not returning expected metrics"
+    echo "ERROR: backend app metrics (or mesh telemetry) not flowing into Prometheus"
     exit 1
   changed_when: false
 
@@ -332,11 +414,13 @@
 - name: Report deployment summary
   ansible.builtin.debug:
     msg:
-      - "DevShop deployed successfully:"
+      - "DevShop deployed successfully (Istio service mesh, STRICT mTLS):"
       - "  Customer:  http://{{ devshop_customer_host }}"
       - "  Admin:     http://{{ devshop_admin_host }}"
-      - "  Backend:   http://{{ devshop_customer_host }}/api (via Nginx)"
+      - "  Backend:   http://{{ devshop_customer_host }}/api (via mesh)"
       - "  Public IP: {{ devshop_public_ip }}"
       - "  Grafana (NOT public):     kubectl -n {{ monitoring_namespace }} port-forward svc/grafana 3000:3000"
       - "  Prometheus (NOT public):  kubectl -n {{ monitoring_namespace }} port-forward svc/prometheus 9090:9090"
+      - "  Kiali (NOT public):       kubectl -n {{ istio_namespace }} port-forward svc/kiali 20001:20001"
+      - "  Jaeger (NOT public):      kubectl -n {{ istio_namespace }} port-forward svc/jaeger 16686:16686"
       - "  Argo CD (NOT public):     kubectl -n {{ k8s_argocd_namespace }} port-forward svc/argocd-server 8080:443"

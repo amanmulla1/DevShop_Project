@@ -1,0 +1,20 @@
+# =============================================================================
+# DevShop - Kustomize for the app-level Istio resources (Argo CD GitOps)
+#
+# These resources belong to the DEVSHOP application (GitOps-managed by Argo
+# CD through kubernetes/overlays/aws, which includes this directory). The
+# Istio CONTROL PLANE (istiod, istio-ingressgateway, Kiali, Jaeger) is a
+# platform component installed separately by kubernetes/scripts/install-istio.sh
+# during the Ansible bootstrap - a different lifecycle from the app.
+#
+# Every resource declares its own namespace explicitly (Ist resources live in
+# devshop; the edge Gateway lives in istio-system where the ingressgateway
+# runs). No kustomize namespace transformer is used so the Gateway stays put.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - gateway.yaml
+  - traffic.yaml
+  - security.yaml

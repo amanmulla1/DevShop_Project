@@ -25,6 +25,11 @@ spec:
     metadata:
       labels:
         app: kube-state-metrics
+      annotations:
+        # OUT of the mesh: kube-state-metrics talks only to the Kubernetes API,
+        # not to DevShop services, so it gains nothing from a sidecar (and the
+        # monitoring node stays lean).
+        sidecar.istio.io/inject: "false"
     spec:
       serviceAccountName: kube-state-metrics
       securityContext:

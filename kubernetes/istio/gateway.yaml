@@ -1,0 +1,88 @@
+# =============================================================================
+# DevShop - Istio ingress Gateway + edge VirtualServices
+#
+# Replaces the old NGINX Ingress Controller. The istio-ingressgateway proxy
+# (run by install-istio.sh in the istio-system namespace) is the single L7
+# entry point into the mesh. Traffic is routed per HOST by the VirtualServices
+# below, then that request runs mTLS-encrypted end-to-end inside the mesh.
+#
+#   devshop.local        -> customer-frontend:80
+#   devshop-admin.local  -> admin-frontend:80
+#
+# HOSTS ARE CONFIGURABLE (no hard-coded EC2 IP). For public access, set the
+# hosts to your real domain(s) and add DNS records to the node's public IP.
+# The Ansible bootstrap patches these runtime hosts (Gateway + VirtualServices)
+# to <ip>.nip.io / admin.<ip>.nip.io - same pattern as the old NGINX ingress,
+# so nothing is baked into Git. Exact hosts keep the routing unambiguous (no
+# wildcard overlap between customer and admin records).
+#
+# About /api: each frontend's Nginx still reverse-proxies /api/* to the
+# backend Service (backend:8080) inside the cluster - that in-pod proxy now
+# simply flows through the Envoy sidecars with mTLS. Keeping /api at the
+# frontend preserves the same-origin architecture, so no /api edge route is
+# needed here.
+#
+# CORS_ALLOWED_ORIGINS in the backend ConfigMap MUST match these hosts exactly.
+# =============================================================================
+
+# --- Edge gateway: binds the istio-ingressgateway http port ------------------
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: devshop-gateway
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "devshop.local"
+        - "devshop-admin.local"
+
+# --- VirtualService: route the customer storefront host -----------------------
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: devshop-customer
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  hosts:
+    - "devshop.local"
+  gateways:
+    - istio-system/devshop-gateway
+  http:
+    - name: customer-root
+      route:
+        - destination:
+            host: customer-frontend
+            port:
+              number: 80
+
+# --- VirtualService: route the admin storefront host --------------------------
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: devshop-admin
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  hosts:
+    - "devshop-admin.local"
+  gateways:
+    - istio-system/devshop-gateway
+  http:
+    - name: admin-root
+      route:
+        - destination:
+            host: admin-frontend
+            port:
+              number: 80

@@ -1,0 +1,79 @@
+# =============================================================================
+# DevShop - Jaeger distributed tracing (all-in-one, lightweight)
+#
+# Jaeger collects the Zipkin-format spans the Envoy sidecars emit (MeshConfig
+# defaultConfig.tracing.zipkin.address -> zipkin.istio-system:9411) and exposes
+# the trace UI on 16686. All-in-one mode (no storage backend) is right for a
+# small learning mesh; traces are held in memory.
+#
+# Access is port-forward only (NOT exposed publicly), same posture as Grafana:
+#   kubectl -n istio-system port-forward svc/jaeger 16686:16686
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: istio-system
+  labels:
+    app: jaeger
+    app.kubernetes.io/part-of: devshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.57
+          ports:
+            - name: query
+              containerPort: 16686
+            - name: zipkin
+              containerPort: 9411
+            - name: oltp-grpc
+              containerPort: 4317
+          env:
+            - name: COLLECTOR_ZIPKIN_HOST_PORT
+              value: "9411"
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /#
+              port: query
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: istio-system
+  labels:
+    app: jaeger
+    app.kubernetes.io/part-of: devshop
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: http-query
+      port: 16686
+      protocol: TCP
+    - name: zipkin
+      port: 9411
+      protocol: TCP
+    - name: oltp-grpc
+      port: 4317
+      protocol: TCP

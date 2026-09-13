@@ -5,6 +5,15 @@ metadata:
   namespace: monitoring
 spec:
   template:
+    metadata:
+      annotations:
+        # Prometheus joins the mesh (targeted injection - the monitoring
+        # namespace itself is NOT auto-injected) so it can scrape the STRICT
+        # mTLS DevShop backend /actuator/prometheus endpoint over mTLS. Its
+        # other out-of-mesh targets (kubelet:10250, apiserver, node-exporter)
+        # still work unchanged - plaintext passthrough to non-mesh endpoints.
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/rewriteAppHTTPProbe: "true"
     spec:
       nodeSelector:
         monitoring-node: "yes"

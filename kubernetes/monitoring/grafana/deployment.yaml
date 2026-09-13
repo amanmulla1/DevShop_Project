@@ -31,6 +31,13 @@ spec:
     metadata:
       labels:
         app: grafana
+      annotations:
+        # Explicit opt-out: Grafana stays OUT of the service mesh. Its only data
+        # source is Prometheus (which runs with a sidecar and is unaffected), so
+        # keeping Grafana lean avoids an extra proxy on the small monitoring
+        # node. The monitoring namespace carries istio-injection=enabled, so
+        # this annotation is what keeps the injector from adding a sidecar.
+        sidecar.istio.io/inject: "false"
     spec:
       securityContext:
         runAsNonRoot: true
@@ -85,6 +92,8 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
+            - name: istio-dashboards
+              mountPath: /var/lib/grafana/istio-dashboards
             - name: data
               mountPath: /var/lib/grafana
       volumes:
@@ -100,6 +109,9 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
+        - name: istio-dashboards
+          configMap:
+            name: grafana-istio-dashboard
         - name: data
           persistentVolumeClaim:
             claimName: grafana-data

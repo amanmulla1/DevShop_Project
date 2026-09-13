@@ -2,9 +2,14 @@
 # DevShop - Kustomize AWS overlay
 #
 # Layered on top of kubernetes/base:
-#   - ../../base           : namespace, configmap, postgres, backend, frontends
-#   - ingress.yaml         : NGINX Ingress (host-based, configurable hosts)
-#   - hpa.yaml             : backend autoscaling (requires Metrics Server)
+#   - ../../base          : namespace, configmap, postgres, backend, frontends
+#   - ../../istio         : Istio edge Gateway, VirtualServices, mTLS policy
+#   - sidecar-annotations : pod-template annotations for sidecar-injected pods
+#   - hpa.yaml            : backend autoscaling (requires Metrics Server)
+#
+# The NGINX Ingress Controller has been replaced by the Istio ingress gateway.
+# The Ingress resource formerly listed here is gone: edge routing now lives in
+# kubernetes/istio/gateway.yaml.
 #
 # Image tags are injected here. Jenkins/Argo CD update `newTag` below to the
 # immutable BUILD_NUMBER (e.g. 42) during the GitOps flow, so no single build
@@ -14,15 +19,51 @@
 # values are never committed to Git. The Secret is created OUTSIDE the
 # Kustomize/Argo CD path (see scripts/deploy.sh + README), so Argo CD neither
 # manages nor prunes it. A committed template lives at secret.example.yaml.
+#
+# The devshop namespace is labelled istio-injection=enabled by the Ansible
+# bootstrap, so every workload below runs with an Envoy sidecar.
 # =============================================================================
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - ../../base
+  - ../../istio
   - nodeplacement.yaml
-  - ingress.yaml
   - hpa.yaml
+
+patches:
+  # Sidecar-aware pod annotations for the HTTP-probe workloads: kubelet health
+  # probes are rewritten to the sidecar port (15020) so STRICT mTLS does not
+  # break readiness/liveness of these pods.
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          sidecar.istio.io/rewriteAppHTTPProbe: "true"
+  - target:
+      kind: Deployment
+      name: customer-frontend
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          sidecar.istio.io/rewriteAppHTTPProbe: "true"
+  - target:
+      kind: Deployment
+      name: admin-frontend
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          sidecar.istio.io/rewriteAppHTTPProbe: "true"
+
+# PostgreSQL uses exec probes (pg_isready) which run inside the container and
+# bypass the mesh, so no annotation is needed there; it still receives a
+# sidecar from the namespace istio-injection label.
 
 # Jenkins / the GitOps flow rewrites newTag to the immutable build number.
 images:

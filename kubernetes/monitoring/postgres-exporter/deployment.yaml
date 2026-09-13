@@ -32,6 +32,14 @@ spec:
     metadata:
       labels:
         app: postgres-exporter
+      annotations:
+        # Targeted sidecar injection: the monitoring namespace is NOT
+        # auto-injected, but postgres-exporter must join the mesh so its
+        # plaintext DSN connection to postgres.devshop:5432 can negotiate
+        # mTLS with the STRICT postgres workload. It then continues scraping
+        # normally (Prometheus reaches it on 9187 unchanged).
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/rewriteAppHTTPProbe: "true"
     spec:
       securityContext:
         runAsNonRoot: true

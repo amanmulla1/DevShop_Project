@@ -23,6 +23,11 @@ spec:
     metadata:
       labels:
         app: alertmanager
+      annotations:
+        # OUT of the mesh: Alertmanager must stay reachable by the mesh-injected
+        # Prometheus over plaintext, and it needs no sidecar of its own. Kept out
+        # to avoid a redundant proxy on the small monitoring node.
+        sidecar.istio.io/inject: "false"
     spec:
       securityContext:
         runAsNonRoot: true

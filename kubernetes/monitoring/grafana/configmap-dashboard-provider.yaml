@@ -85,3 +85,12 @@ data:
         allowUiUpdates: false
         options:
           path: /var/lib/grafana/dashboards/ci-cd.json
+      - name: 'DevShop Istio'
+        orgId: 1
+        folder: 'DevShop/Istio'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/istio-dashboards/istio-mesh.json

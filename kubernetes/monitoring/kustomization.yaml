@@ -41,5 +41,6 @@ resources:
   - grafana/configmap-datasource.yaml
   - grafana/configmap-dashboard-provider.yaml
   - grafana/configmap-dashboards.yaml
+  - grafana/configmap-istio-dashboards.yaml
   - grafana/deployment.yaml
   - grafana/service.yaml

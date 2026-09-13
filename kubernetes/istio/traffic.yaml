@@ -1,0 +1,112 @@
+# =============================================================================
+# DevShop - internal traffic-management policies (mesh east-west)
+#
+# A VirtualService adds retry + timeout policy to the backend API calls that
+# already flow through the mesh (browser -> gateway -> frontend nginx ->
+# backend, and any future direct service-to-service call).
+#
+# DestinationRules show how L7/L5 load-balancing, connection pooling and
+# outlier detection are expressed for each service. With single-replica
+# workloads these are light, but they are the correct hooks to tune when
+# replicas are added (e.g. via the backend HPA).
+#
+# No subset/v2 routing exists yet: the DevShop backend only publishes one
+# revision. `exportTo: "."` keeps all rules namespace-local to devshop.
+# =============================================================================
+
+# --- Backend VirtualService: client-side retries + timeouts -------------------
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: backend
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  hosts:
+    - backend
+  http:
+    - name: backend-api
+      match:
+        - uri:
+            prefix: /api/
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 5s
+        retryOn: connect-failure,refused-stream,503
+      route:
+        - destination:
+            host: backend
+            port:
+              number: 8080
+
+# --- Backend DestinationRule ---------------------------------------------------
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: backend
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  host: backend
+  exportTo:
+    - "."
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 3s
+      http:
+        http1MaxPendingRequests: 128
+        http2MaxRequests: 128
+        maxRequestsPerConnection: 12
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+
+# --- customer-frontend DestinationRule ------------------------------------------
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: customer-frontend
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  host: customer-frontend
+  exportTo:
+    - "."
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http2MaxRequests: 512
+
+# --- admin-frontend DestinationRule ---------------------------------------------
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: admin-frontend
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  host: admin-frontend
+  exportTo:
+    - "."
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http2MaxRequests: 512

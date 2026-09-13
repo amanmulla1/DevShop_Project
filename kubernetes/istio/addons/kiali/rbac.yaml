@@ -1,0 +1,69 @@
+# =============================================================================
+# DevShop - Kiali RBAC
+#
+# Read-oriented cluster role so Kiali can render the service graph for the
+# whole cluster (workloads, services, istio config) without write access.
+# view_only_mode is enforced in the Kiali ConfigMap too.
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kiali
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+rules:
+  - apiGroups: ["networking.istio.io"]
+    resources:
+      - virtualservices
+      - destinationrules
+      - gateways
+      - serviceentries
+      - sidecars
+      - envoyfilters
+      - workloadentries
+      - workloadgroups
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["security.istio.io"]
+    resources:
+      - authorizationpolicies
+      - peerauthentications
+      - requestauthentications
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - services
+      - endpoints
+      - configmaps
+      - replicationsets
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources:
+      - servicemonitors
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kiali
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kiali
+subjects:
+  - kind: ServiceAccount
+    name: kiali-service-account
+    namespace: istio-system

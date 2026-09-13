@@ -23,6 +23,11 @@ spec:
     metadata:
       labels:
         app: node-exporter
+      annotations:
+        # OUT of the mesh: node-exporter runs hostNetwork on every node and is
+        # scraped at hostIP:9100. A sidecar could not cleanly protect/leverage it
+        # and would waste resources on the t3.micro nodes.
+        sidecar.istio.io/inject: "false"
     spec:
       hostNetwork: true
       hostPID: true

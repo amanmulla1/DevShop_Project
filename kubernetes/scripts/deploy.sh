@@ -90,10 +90,12 @@ for dep in postgres backend customer-frontend admin-frontend; do
 done
 
 echo "== 6. Status =="
-kubectl -n devshop get pods,svc,deploy,pvc,ingress,hpa
+kubectl -n devshop get pods,svc,deploy,pvc,hpa
 kubectl -n devshop get secret devshop-secret -o name || true
+kubectl -n istio-system get gateway,virtualservice 2>/dev/null || true
 
 echo
 echo "Deploy complete."
-echo "Verify endpoints (Ingress host must map to the node IP in /etc/hosts):"
-echo "  kubectl -n devshop get ingress devshop-ingress"
+echo "Verify endpoints (Istio gateway host must map to the node IP in /etc/hosts):"
+echo "  kubectl -n istio-system get svc istio-ingressgateway"
+echo "  kubectl -n devshop get virtualservice"

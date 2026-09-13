@@ -40,20 +40,24 @@ Developer -> git push
     v                      v
 Docker Hub    ->    Kubernetes cluster (EC2, t3.micro)
                            |
-                     +------+--------+
-                     |               |
-              app worker      monitoring worker
-              +----------+     prometheus, grafana,
-              | postgres  |     alertmanager, exporters
-              | backend   |
-              | frontends |
-              +----------+          control plane (tainted)
-                                    kubeadm + Calico + Argo CD
+                      +------+--------+
+                      |               |
+               app worker      monitoring worker
+               +----------+     prometheus, grafana,
+               | postgres  |     alertmanager, exporters
+               | backend   |
+               | frontends |     istio-system
+               +----------+     istiod, ingress-gateway,
+                                kiali (mesh UI), jaeger (traces)
+                     (Envoy sidecars everywhere)
 
-                             NGINX Ingress (NodePort)
-                                      |
-                                      v
-                             Browser -> http://<public-ip>.nip.io
+              control plane (tainted)
+              kubeadm + Calico + Argo CD
+
+                  Istio Ingress Gateway (NodePort)
+                           |
+                           v
+                Browser -> http://<public-ip>.nip.io
 ```
 
 - **One control plane** (kubeadm, stays tainted) runs Calico, Metrics Server,
@@ -62,8 +66,11 @@ Docker Hub    ->    Kubernetes cluster (EC2, t3.micro)
   and binds its local-path volume.
 - **Worker 1 (or worker 0 in a single-worker cluster)** carries Prometheus,
   Grafana, Alertmanager, and the exporters.
-- All traffic enters through the **NGINX Ingress** (NodePort, no load
-  balancer).
+- **Istio service mesh** runs the whole stack: an ingress-gateway terminates
+  edge traffic (NodePort, no load balancer) and every workload gets an injected
+  Envoy sidecar, with **STRICT mTLS** enforcing encrypted service-to-service
+  traffic inside the cluster. Kiali (mesh view) and Jaeger (traces) run in
+  `istio-system` for observability.
 
 ## Repository layout
 
@@ -82,7 +89,9 @@ devshop/
 ├── sonar-project.properties  # SonarQube config for both frontends
 ├── scripts/                # CI deploy / health check / rollback + DevSecOps helpers
 ├── jenkins/                # Jenkins setup notes, sonarqube/ compose server
-├── kubernetes/             # K8s manifests, Argo CD apps, monitoring stack
+├── kubernetes/             # K8s manifests, Istio mesh, Argo CD apps, monitoring
+│   ├── istio/              # Gateway, VirtualServices, STRICT mTLS, Kiali + Jaeger add-ons
+│   └── monitoring/         # Prometheus, Grafana, Alertmanager, exporters
 ├── terraform/              # AWS infrastructure
 └── ansible/                # node bootstrap + cluster configuration
 ```
@@ -139,14 +148,16 @@ What it does, in order:
      (containerd, kubeadm, Calico, Metrics), write the join command
    - `kubernetes_worker`: copy the join command from the control plane and run
      `join-worker.sh` on each worker
-   - `kubernetes_configure`: node labels, local-path storage, NGINX ingress,
-     Argo CD, secrets (outside GitOps), ingress host patch, sync waits, health
-     checks
+   - `kubernetes_configure`: node labels, local-path storage, Argo CD, secrets
+     (outside GitOps), **Istio install + mesh host patch**, Kiali/Jaeger add-ons,
+     sync waits, health checks
 6. **wait for Argo CD** to sync both Applications (`devshop`, `monitoring`) to
    `Synced` + `Healthy`
-7. **health checks** — pod readiness, backend `/actuator/health`, both
-   storefronts through the ingress, Prometheus scraping
-8. **print the summary** with the customer/admin URLs
+7. **health checks** — pod readiness (incl. both sidecars), backend
+   `/actuator/health` and storefront pages **through the Istio gateway**,
+   Prometheus scraping (app metrics + mesh telemetry)
+8. **print the summary** with the customer/admin URLs and the port-forward
+   commands for Grafana/Prometheus/Kiali/Jaeger
 
 Re-running it only makes the changes still needed — there is nothing to destroy
 and start over. Teardown is explicit:
@@ -191,17 +202,17 @@ when you are not using the cluster.
 
 ### How secrets and public IPs are handled
 
-- Secrets (DB password, JWT secret, admin password, Grafana password) are
-  generated **once** on your machine into the git-ignored `.devshop/secrets.yml`
-  (mode 0600) and **reused** on every run — no rotation, no printing. Ansible
-  renders the in-cluster `devshop-secret` and the monitoring secrets from these
-  values **outside** Argo CD (so they are never committed and never pruned),
-  with `no_log` on every sensitive task.
+- Secrets (DB password, JWT secret, admin password, Grafana + **Kiali**
+  passwords) are generated **once** on your machine into the git-ignored
+  `.devshop/secrets.yml` (mode 0600) and **reused** on every run — no rotation,
+  no printing. Ansible renders the in-cluster `devshop-secret`, the monitoring
+  secrets, and the Kiali secret from these values **outside** Argo CD (so they
+  are never committed and never pruned), with `no_log` on every sensitive task.
 - The nodes use normal public IPv4s (no Elastic IP). Addresses are read from
-  `terraform output`, so nothing is hard-coded. The ingress hostnames are
+  `terraform output`, so nothing is hard-coded. The gateway hostnames are
   derived at apply time from the detected IP (`http://<ip>.nip.io`). If an IP
   changes after stop/start, re-running `./deploy.sh` regenerates the inventory
-  and re-patches the ingress — no source changes.
+  and re-patches the gateway hosts — no source changes.
 
 ## Kubernetes details
 
@@ -211,15 +222,42 @@ The cluster is standard Kubernetes (kubeadm, containerd, Calico), not K3s.
   actual workload.
 - **Storage:** local-path provisioner for the PostgreSQL + Prometheus PVCs
   (`local-path` StorageClass).
-- **Ingress:** NGINX Ingress Controller via NodePort — no load balancer.
-- **Namespaces:** `devshop` (app), `monitoring` (observability), `argocd`
-  (GitOps controller).
+- **Edge + mesh:** Istio (pinned to 1.23.x) — `istio-ingressgateway` routes only
+  public traffic (NodePort, no load balancer); every app workload carries an
+  Envoy sidecar and all in-mesh traffic is encrypted with **STRICT mTLS**
+  (PeerAuthentication in the `devshop` namespace). No NGINX ingress.
+- **Namespaces:** `devshop` (app, mesh-enabled), `monitoring` (observability,
+  Prometheus/postgres-exporter in the mesh), `istio-system` (istiod, gateway,
+  Kiali, Jaeger), `argocd` (GitOps controller).
 - **App workloads:** postgres, backend, customer-frontend, admin-frontend —
-  Deployments, Services, ConfigMap, readiness/liveness probes, and an HPA on
-  the backend.
+  Deployments, Services, ConfigMap, readiness/liveness probes (HTTP probes
+  rewritten for the sidecar), and an HPA on the backend. Frontends keep their
+  Nginx `/api` reverse-proxy to the backend — it now flows over the mesh.
 - **Placement:** the Kustomize AWS overlay pins the application to the app node
   (`app-node=yes`); the monitoring overlay pins Prometheus/Grafana/Alertmanager
   to the monitoring node (`monitoring-node=yes`).
+
+### Istio service mesh
+
+- **Install:** `kubernetes/scripts/install-istio.sh` (pinned `ISTIO_VERSION`,
+  `istioctl install`) installs istiod + the ingress-gateway and labels the
+  `devshop` and `monitoring` namespaces for injection. The remaining mesh
+  objects (Gateway, VirtualServices, DestinationRules, STRICT mTLS
+  PeerAuthentication) live in `kubernetes/istio/` and are synced by Argo CD
+  through the `devshop` Application. Kiali/Jaeger and the Kiali secret are
+  applied by Ansible **outside** Argo CD (credentials stay out of Git).
+- **Routing:** one Gateway terminates `http` traffic; two VirtualServices route
+  `devshop.local` → customer-storefront and `devshop-admin.local` → admin
+  storefront, with `/api` path rules retried by the backend ClusterIP service.
+  Hosts are runtime-patched to `<ip>.nip.io` / `admin.<ip>.nip.io` at deploy
+  time.
+- **mTLS:** a namespace-scoped `PeerAuthentication` enforces `STRICT` in
+  `devshop` — plaintext (e.g. `curl` from the host) is refused, all app traffic
+  is mutually-authenticated. Prometheus and postgres-exporter are injected so
+  they keep reaching the backend `/actuator/prometheus` and PostgreSQL under
+  STRICT mTLS.
+- **Traces:** every sidecar ships Zipkin-compatible spans to
+  `zipkin.istio-system:9411` (Jaeger all-in-one) — no app code changes.
 
 ### GitOps flow
 
@@ -293,22 +331,25 @@ Three automated gates run inside the CI pipeline (see
 
 Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics, and
 postgres-exporter ship in the same deploy, managed by a second Argo CD
-Application (`monitoring`). Seven Grafana dashboards are auto-provisioned (no
+Application (`monitoring`). Eight Grafana dashboards are auto-provisioned (no
 manual import): Executive Overview, K8s Cluster, EC2/Node, App/API, PostgreSQL,
-Workloads, and CI/CD. Prometheus ships with alert + recording rules
-(`critical`/`warning`/`info`) and 15-day retention on a PVC.
+Workloads, **Istio Mesh**, and CI/CD. Prometheus ships with alert + recording
+rules (`critical`/`warning`/`info`) and 15-day retention on a PVC.
 
-Dashboards and Prometheus are **ClusterIP-only**; reach them with
-port-forwarding:
+Dashboards, Prometheus, Kiali, and Jaeger are **ClusterIP-only**; reach them
+with port-forwarding:
 
 ```bash
 kubectl -n monitoring port-forward svc/grafana 3000:3000     # http://localhost:3000
 kubectl -n monitoring port-forward svc/prometheus 9090:9090   # http://localhost:9090
+kubectl -n istio-system port-forward svc/kiali 20001:20001    # http://localhost:20001
+kubectl -n istio-system port-forward svc/jaeger 16686:16686   # http://localhost:16686
 ```
 
 Grafana creds live in `.devshop/secrets.yml` (`grafana_admin_user` /
 `grafana_admin_password`), rendered as a Secret by Ansible outside Argo CD so
-they are never committed or pruned. Details in
+they are never committed or pruned. Kiali uses `kiali_admin_user` /
+`kiali_admin_password` from the same file. Details in
 `kubernetes/monitoring/README.md`.
 
 ## Security
@@ -316,12 +357,12 @@ they are never committed or pruned. Details in
 | Port | Exposed | Use |
 |------|---------|-----|
 | `22` | your CIDR only | SSH |
-| `80/443`, `30000-32767` | yes | NGINX ingress + NodePort range |
+| `80/443`, `30000-32767` | yes | Istio ingress-gateway + NodePort range |
 | `5173/5174/8080` | yes (compose fallback) | storefronts/backend via docker-compose path |
 | `5432` | **closed** | PostgreSQL stays inside the cluster |
 
-- The Argo CD and Grafana/Prometheus UIs are intentionally **not public** —
-  reach them via `kubectl port-forward`.
+- The Argo CD, Grafana/Prometheus, Kiali, and Jaeger UIs are intentionally
+  **not public** — reach them via `kubectl port-forward`.
 - IAM uses least privilege (no AWS API policies on the instance role); no
   secrets in user_data or Terraform.
 - No secrets, keys, or EC2 public IPs are committed to Git; every sensitive
@@ -364,7 +405,7 @@ with `kubectl -n devshop scale deployment/backend --replicas=2` if you ever want
 more on a bigger node (thread carefully on `t3.micro`).
 
 **Stop / restart** — the nodes have no Elastic IP, so an IP change after a stop
-just needs a `./deploy.sh` re-run (it re-patches the ingress hosts). To truly
+just needs a `./deploy.sh` re-run (it re-patches the gateway hosts). To truly
 end the stack: `./destroy.sh`. PostgreSQL data lives on the node's local-path
 volume, so a terminate loses it — back it up if you care (it is a single-node
 learning setup, not HA).
@@ -374,7 +415,8 @@ learning setup, not HA).
 | Symptom | Check / fix |
 |---------|-------------|
 | Deploy hangs on "Wait for nodes Ready" | `ssh` to the control plane; `sudo kubectl get nodes` — make sure workers joined; see `/var/log/syslog` and `journalctl -u kubelet` on a worker |
-| Ingress 404 | Host not mapped: after an IP change re-run `./deploy.sh`, or map `<ip>.nip.io` / your domain via `kubectl -n devshop get ingress` |
+| Gateway 404 / VirtualService not routing | Host not mapped: after an IP change re-run `./deploy.sh`, or check `kubectl -n istio-system get gateway,vs` and verify the Gateway host + VirtualService hostnames |
+| Kiali reports no graph / unhealthy mesh | Kiali credentials out of date: delete `kubernetes/istio/addons/kiali/secret.yaml` and re-run `./deploy.sh`; the secret is regenerated on re-run |
 | PVC `Pending` | Storage class missing: run `install-storage.sh` or re-run the configure play |
 | HPA never scales | `sudo kubectl top nodes` — Metrics Server must be reporting |
 | Argo CD not syncing | Repo path/targetRevision wrong, or the `[ci skip]` write-back looped — enable the webhook path filter to `application/**` |

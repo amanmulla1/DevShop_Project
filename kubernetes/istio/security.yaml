@@ -1,0 +1,71 @@
+# =============================================================================
+# DevShop - mesh security policy
+#
+# PeerAuthentication enforces STRICT mTLS for every workload in the devshop
+# namespace. All in-cluster traffic (frontend nginx -> backend, backend ->
+# postgres, prometheus -> backend, postgres-exporter -> postgres) is therefore
+# mutually-authenticated and encrypted at the Envoy proxy layer.
+#
+# Scoped to the devshop NAMESPACE (no mesh-wide default) so the monitoring and
+# argocd namespaces keep working unchanged. Prometheus and postgres-exporter
+# are explicitly injected with sidecars (see kubernetes/monitoring) so they can
+# still reach these strict workloads over mTLS.
+#
+# This policy is namespace-wide (no selector). The old NGINX ingress is gone,
+# so there is no other plaintext path into these workloads.
+#
+# see also: the kubelet probe story in the sidecar-annotations overlay patch -
+#             kubelet health checks are rewritten to the sidecar port (15020).
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: devshop
+  labels:
+    app.kubernetes.io/part-of: devshop
+spec:
+  mtls:
+    mode: STRICT
+
+# =============================================================================
+# OPTIONAL - zero-trust AuthorizationPolicy (commented out by default)
+#
+# Enabling this turns on allow-list service identity. Uncomment ONLY after the
+# mesh is verified working, otherwise it can lock out legitimate paths:
+#   - kubelet HTTP probes hit the rewritten sidecar port (15020) and are NOT
+#     subject to the policy below (they terminate at the sidecar).
+#   - exec probes (postgres) run inside the pod and bypass the mesh.
+#   - Prometheus (with sidecar, in monitoring) and postgres-exporter must be
+#     explicitly allowed, otherwise their scrape/connect traffic is rejected.
+#
+# Example - deny all by default, then allow the known mesh identities:
+#
+# apiVersion: security.istio.io/v1
+# kind: AuthorizationPolicy
+# metadata:
+#   name: deny-all
+#   namespace: devshop
+# spec:
+#   {}
+#
+# ---
+# apiVersion: security.istio.io/v1
+# kind: AuthorizationPolicy
+# metadata:
+#   name: allow-mesh-and-gateway
+#   namespace: devshop
+# spec:
+#   action: ALLOW
+#   rules:
+#     - from:
+#         - source:
+#             principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+#         - source:
+#             principals: ["cluster.local/ns/monitoring/sa/prometheus"]
+#         - source:
+#             principals: ["cluster.local/ns/monitoring/sa/default"]  # postgres-exporter
+#     - to:
+#         - operation:
+#             methods: ["GET"]
+# =============================================================================

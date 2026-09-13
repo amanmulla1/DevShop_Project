@@ -1,0 +1,38 @@
+# =============================================================================
+# DevShop - Kiali configuration (ConfigMap)
+#
+# Points Kiali at the existing Prometheus and Jaeger services and enables
+# login-based auth (credentials come from the `kiali` Secret). view_only_mode
+# keeps Kiali read-only - ideal for observing, not mutating, the mesh.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiali
+  namespace: istio-system
+  labels:
+    app: kiali
+    app.kubernetes.io/part-of: devshop
+data:
+  config.yaml: |
+    server:
+      port: 20001
+      web_root: /
+    auth:
+      strategy: login
+    deployment:
+      view_only_mode: true
+      ingress_enabled: false
+      accessible_namespaces:
+        - "**"
+    external_services:
+      prometheus:
+        url: http://prometheus.monitoring:9090
+      tracing:
+        enabled: true
+        in_cluster_url: http://jaeger.istio-system:16686
+        url: http://jaeger.istio-system:16686
+      istio:
+        config_map_name: istio
+        mesh_config_map_name: istio
+        components: []
