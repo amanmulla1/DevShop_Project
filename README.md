@@ -459,4 +459,6 @@ cd application/admin-frontend && npm test
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — see the LICENSE file for details.
+**All Rights Reserved.** This project is the exclusive property of Aman Mulla.
+Copying, reproducing, modifying, or distributing it in whole or in part is
+strictly prohibited without express written permission — see the [LICENSE](LICENSE) file for details.
